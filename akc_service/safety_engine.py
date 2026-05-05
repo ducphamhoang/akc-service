@@ -679,11 +679,14 @@ def _execute_escape_hatch_effects(mode: str) -> list:
         effects.append("Monitoring alerts elevated to 1-hour cadence")
 
     elif mode == "reset":
-        # Find last checkpoint (most recent confidence_history entry)
-        effects.append("KB reset to last checkpoint")
-        effects.append("Audit trail preserved in confidence_history.jsonl")
-        effects.append("All patterns reverted to checkpoint confidence values")
-        effects.append("Operations team notified")
+        from akc_service.learning_integration import restore_from_checkpoint
+        success = restore_from_checkpoint()
+        if success:
+            effects.append("KB patterns restored from checkpoint")
+            effects.append("Audit trail preserved in confidence_history.jsonl")
+        else:
+            effects.append("ERROR: No checkpoint available — cannot restore")
+            effects.append("Manual recovery required")
 
     elif mode == "none":
         effects.append("Normal operation restored")

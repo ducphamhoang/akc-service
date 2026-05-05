@@ -64,6 +64,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"API version: {app.version}")
     logger.info(f"Title: {app.title}")
 
+    # Save checkpoint on startup (for reset escape hatch recovery)
+    from akc_service.learning_integration import save_checkpoint
+    try:
+        save_checkpoint()
+        logger.info("Checkpoint saved on startup")
+    except Exception as e:
+        logger.error(f"Failed to save checkpoint on startup: {e}")
+
     yield
 
     # Shutdown

@@ -36,6 +36,7 @@ _REPO_ROOT = Path(os.environ.get("AKC_SERVICE_REPO_ROOT", str(Path.cwd())))
 
 PATTERNS_PATH = KB_DIR / "patterns.jsonl"
 CONFIDENCE_HISTORY_PATH = KB_DIR / "confidence_history.jsonl"
+CHECKPOINT_PATH = KB_DIR / "patterns.checkpoint"
 
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
@@ -193,6 +194,72 @@ def append_confidence_history(entry: dict) -> None:
     CONFIDENCE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIDENCE_HISTORY_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+# ─── Checkpoint Save/Restore (Reset Escape Hatch) ───────────────────────────────
+
+def save_checkpoint() -> None:
+    """
+    Save current patterns.jsonl as checkpoint (called on startup).
+
+    Creates an atomic snapshot of patterns.jsonl that can be restored later
+    when the reset escape hatch is triggered. Uses atomic write-temp-rename.
+
+    Called on service startup to capture known-good KB state.
+    """
+    if not PATTERNS_PATH.exists():
+        return  # No patterns yet, nothing to checkpoint
+
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read patterns.jsonl
+    try:
+        patterns_content = PATTERNS_PATH.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return  # Cannot read patterns, skip checkpoint
+
+    # Write to temporary file first
+    tmp = CHECKPOINT_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(patterns_content, encoding="utf-8")
+        # Atomically replace checkpoint with temp file
+        tmp.replace(CHECKPOINT_PATH)
+    except (IOError, OSError):
+        pass  # Checkpoint write failure should not block startup
+
+
+def restore_from_checkpoint() -> bool:
+    """
+    Restore patterns.jsonl from checkpoint (called on reset escape hatch).
+
+    Atomically restores patterns.jsonl from the saved checkpoint, effectively
+    reverting all KB changes to the state when the service started.
+
+    Called when reset escape hatch is triggered to recover from KB corruption.
+
+    Returns:
+        True if restoration successful, False if no checkpoint available.
+    """
+    if not CHECKPOINT_PATH.exists():
+        return False  # No checkpoint available
+
+    try:
+        # Read checkpoint content
+        checkpoint_content = CHECKPOINT_PATH.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return False  # Cannot read checkpoint
+
+    PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to temporary file first
+    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(checkpoint_content, encoding="utf-8")
+        # Atomically replace patterns.jsonl with temp file
+        tmp.replace(PATTERNS_PATH)
+        return True
+    except (IOError, OSError):
+        return False  # Restoration failed
 
 
 # ─── Phase 4 Wave 4: Async/Sync Confidence Updates ──────────────────────────────
