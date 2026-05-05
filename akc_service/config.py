@@ -16,6 +16,13 @@ _DEFAULT_KB_DIR = Path(__file__).parent / "kb"
 KB_DIR: Path = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
 
 
+# ─── KB Export Configuration ─────────────────────────────────────────────────
+
+KB_EXPORT_DIR: Path = Path(os.environ.get("AKC_SERVICE_KB_EXPORT_DIR", "./kb_export"))
+KB_EXPORT_FORMAT: str = os.environ.get("AKC_SERVICE_KB_EXPORT_FORMAT", "by-entity")
+KB_EXPORT_MIN_CONFIDENCE: float = float(os.environ.get("AKC_SERVICE_KB_EXPORT_MIN_CONFIDENCE", "0.0"))
+
+
 # ─── Safety Level ───────────────────────────────────────────────────────────
 
 def _read_safety_level() -> int:
