@@ -161,11 +161,13 @@ def load_all_patterns() -> list:
 
 
 def save_all_patterns(patterns: list) -> None:
-    """Save all patterns to patterns.jsonl (overwrite)."""
+    """Atomically save all patterns to patterns.jsonl (overwrite)."""
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(PATTERNS_PATH, "w", encoding="utf-8") as f:
+    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         for p in patterns:
             f.write(json.dumps(p) + "\n")
+    tmp.replace(PATTERNS_PATH)
 
 
 def append_confidence_history(entry: dict) -> None:
@@ -535,13 +537,14 @@ def apply_confidence_delta(task_result: dict) -> dict:
             "message": "No patterns to update"
         }
 
-    # Load all patterns
+    # Load all patterns (for find_pattern_by_id lookup only)
     patterns = load_all_patterns()
     patterns_updated = 0
 
     # For each active pattern, apply delta and create version snapshot
     for pattern_id in active_patterns:
-        pattern = next((p for p in patterns if p.get("id") == pattern_id), None)
+        # Find pattern (returns last occurrence, most recent version)
+        pattern = find_pattern_by_id(pattern_id, patterns)
 
         if not pattern:
             print(f"WARNING: Pattern {pattern_id} not found in KB; skipping", file=sys.stderr)
@@ -557,11 +560,6 @@ def apply_confidence_delta(task_result: dict) -> dict:
 
         # Check if tier changed
         tier_changed = old_tier != new_tier
-
-        # Update pattern confidence and tier
-        pattern["confidence"] = new_confidence
-        pattern["confidence_tier"] = new_tier
-        pattern["updated_at"] = now_iso()
 
         # Create version snapshot (increment version)
         version_info = pattern.get("version", {"current": "v1", "history": []})
@@ -585,9 +583,18 @@ def apply_confidence_delta(task_result: dict) -> dict:
         }
 
         # Append to history (immutable)
-        version_info["history"].append(snapshot)
-        version_info["current"] = next_version
-        pattern["version"] = version_info
+        history = version_info.get("history", [])
+        history.append(snapshot)
+        version_info = {**version_info, "current": next_version, "history": history}
+
+        # Build updated pattern with new version and confidence
+        updated_pattern = {
+            **pattern,
+            "confidence": new_confidence,
+            "confidence_tier": new_tier,
+            "updated_at": now_iso(),
+            "version": version_info
+        }
 
         # Record delta application time for latency measurement
         delta_applied_time = now_iso()
@@ -601,7 +608,10 @@ def apply_confidence_delta(task_result: dict) -> dict:
         except (ValueError, AttributeError):
             pass  # If timestamp parse fails, latency_ms stays 0
 
-        # Append to confidence history
+        # Append immutable version to patterns.jsonl (append-only, no race condition)
+        append_pattern_version(updated_pattern)
+
+        # Append to confidence history (immutable audit trail)
         history_entry = {
             "history_id": make_history_id(),
             "timestamp": now_iso(),
@@ -629,10 +639,6 @@ def apply_confidence_delta(task_result: dict) -> dict:
         )
 
         patterns_updated += 1
-
-    # Save all updated patterns
-    if patterns_updated > 0:
-        save_all_patterns(patterns)
 
     # Calculate execution time
     end_time = time.time()

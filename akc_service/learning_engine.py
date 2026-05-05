@@ -110,10 +110,13 @@ def load_pattern(pattern_id: str) -> dict | None:
 
 
 def save_all_patterns(patterns: list) -> None:
+    """Atomically save all patterns to patterns.jsonl (overwrite)."""
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(PATTERNS_PATH, "w", encoding="utf-8") as f:
+    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         for p in patterns:
             f.write(json.dumps(p) + "\n")
+    tmp.replace(PATTERNS_PATH)
 
 
 def append_confidence_history(entry: dict) -> None:

@@ -64,7 +64,7 @@ TIER_3_QUEUE_PATH = ROUTING_DIR / "tier_3_queue.jsonl"
 STAGING_PIPELINE_PATH = STAGING_DIR / "staging_pipeline.jsonl"
 STAGING_VALIDATION_PATH = STAGING_DIR / "staging_validation_results.jsonl"
 STAGING_METRICS_PATH = STAGING_DIR / "staging_metrics.jsonl"
-LATENCY_HISTORY_PATH = KB_DIR / "latency_history.jsonl"
+LATENCY_HISTORY_PATH = KB_DIR / "latency_samples.jsonl"
 
 # T-FIX-12: Max batch size
 MAX_BATCH_SIZE = 50
