@@ -693,8 +693,8 @@ def check_latency() -> dict:
     p95_index = int(len(entries_sorted) * 0.95)
     p95_ms = entries_sorted[p95_index] if p95_index < len(entries_sorted) else max_ms
 
-    # Count over SLA (5 minutes = 300,000 ms)
-    sla_threshold_ms = 300000
+    # Count over SLA (50 ms per documented SLA budget)
+    sla_threshold_ms = 50
     over_sla_count = sum(1 for e in entries if e > sla_threshold_ms)
 
     # Determine SLA status

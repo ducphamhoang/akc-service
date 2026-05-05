@@ -39,7 +39,7 @@ _REPO_ROOT = Path(os.environ.get("AKC_SERVICE_REPO_ROOT", str(Path.cwd())))
 ROUTING_DIR = KB_DIR / "routing"
 STAGING_DIR = KB_DIR / "staging"
 
-LATENCY_HISTORY_PATH = KB_DIR / "latency_history.jsonl"
+LATENCY_HISTORY_PATH = KB_DIR / "latency_samples.jsonl"
 LATENCY_BASELINE_PATH = _REPO_ROOT / ".planning" / "LATENCY_BASELINE.md"
 
 # SLA constants

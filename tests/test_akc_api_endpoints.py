@@ -475,5 +475,47 @@ class TestEndpointIntegration:
         assert record_response.json()["patterns_to_update"] == 1
 
 
+class TestSLAThreshold:
+    """Tests for SLA threshold correctness (50ms, not 5 minutes)."""
+
+    def test_sla_warning_when_latency_exceeds_50ms(self, tmp_path, monkeypatch):
+        """SLA status should be WARNING when latency exceeds 50ms."""
+        from akc_service import learning_integration as li
+        import json
+        from pathlib import Path
+
+        # Create confidence history file
+        latency_file = tmp_path / "confidence_history.jsonl"
+        latency_file.write_text(
+            json.dumps({"latency_ms": 30}) + "\n" +
+            json.dumps({"latency_ms": 80}) + "\n"
+        )
+
+        # Patch the path constant
+        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", latency_file)
+
+        result = li.check_latency()
+        assert result["sla_status"] == "WARNING"
+
+    def test_sla_healthy_when_all_latency_under_50ms(self, tmp_path, monkeypatch):
+        """SLA status should be HEALTHY when all latency under 50ms."""
+        from akc_service import learning_integration as li
+        import json
+        from pathlib import Path
+
+        # Create confidence history file
+        latency_file = tmp_path / "confidence_history.jsonl"
+        latency_file.write_text(
+            json.dumps({"latency_ms": 10}) + "\n" +
+            json.dumps({"latency_ms": 40}) + "\n"
+        )
+
+        # Patch the path constant
+        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", latency_file)
+
+        result = li.check_latency()
+        assert result["sla_status"] == "HEALTHY"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
