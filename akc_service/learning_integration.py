@@ -104,6 +104,12 @@ def append_pattern_version(pattern: dict) -> None:
     Updates the confidence, confidence_tier, updated_at, and version fields
     of the pattern before appending. Uses advisory file lock to prevent concurrent append corruption.
     """
+    # Guard: Quarantine mode blocks KB writes
+    from akc_service.safety_engine import load_safety_state
+    safety_state = load_safety_state()
+    if safety_state.get("escape_hatch") == "quarantine":
+        raise RuntimeError("KB writes blocked: quarantine mode active")
+
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(PATTERNS_PATH, "a", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -135,6 +141,12 @@ def log_confidence_update(entry: dict) -> None:
 
     Uses advisory file lock to prevent concurrent append corruption.
     """
+    # Guard: Quarantine mode blocks KB writes
+    from akc_service.safety_engine import load_safety_state
+    safety_state = load_safety_state()
+    if safety_state.get("escape_hatch") == "quarantine":
+        raise RuntimeError("KB writes blocked: quarantine mode active")
+
     CONFIDENCE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIDENCE_HISTORY_PATH, "a", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -162,6 +174,12 @@ def load_all_patterns() -> list:
 
 def save_all_patterns(patterns: list) -> None:
     """Atomically save all patterns to patterns.jsonl (overwrite)."""
+    # Guard: Quarantine mode blocks KB writes
+    from akc_service.safety_engine import load_safety_state
+    safety_state = load_safety_state()
+    if safety_state.get("escape_hatch") == "quarantine":
+        raise RuntimeError("KB writes blocked: quarantine mode active")
+
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = PATTERNS_PATH.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:

@@ -69,6 +69,11 @@ def load_fix(fix_id: str) -> dict | None:
 
 
 def update_fix(fix_id: str, updates: dict) -> bool:
+    # Guard: Quarantine mode blocks KB writes
+    safety_state = load_safety_state()
+    if safety_state.get("escape_hatch") == "quarantine":
+        raise RuntimeError("KB writes blocked: quarantine mode active")
+
     if not FIX_HISTORY_PATH.exists():
         return False
     lines = []

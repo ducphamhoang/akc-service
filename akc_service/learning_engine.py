@@ -111,6 +111,12 @@ def load_pattern(pattern_id: str) -> dict | None:
 
 def save_all_patterns(patterns: list) -> None:
     """Atomically save all patterns to patterns.jsonl (overwrite)."""
+    # Guard: Quarantine mode blocks KB writes
+    from akc_service.safety_engine import load_safety_state
+    safety_state = load_safety_state()
+    if safety_state.get("escape_hatch") == "quarantine":
+        raise RuntimeError("KB writes blocked: quarantine mode active")
+
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = PATTERNS_PATH.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
