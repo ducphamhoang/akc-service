@@ -112,6 +112,18 @@ def append_pattern_version(pattern: dict) -> None:
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
 
+    # Queue for remote sync if enabled and confidence meets threshold
+    try:
+        from akc_service.sync import config as sync_cfg
+        from akc_service.sync.state import load_state, add_pending_id
+        if sync_cfg.sync_enabled():
+            confidence = pattern.get("confidence", 0.0)
+            if confidence >= sync_cfg.MIN_CONFIDENCE:
+                state = load_state(KB_DIR)
+                add_pending_id(state, pattern["id"], KB_DIR)
+    except Exception:
+        pass  # sync queue failure must never break the core write path
+
 
 def log_confidence_update(entry: dict) -> None:
     """

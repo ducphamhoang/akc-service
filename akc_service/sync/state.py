@@ -20,11 +20,13 @@ def load_state(kb_dir: Path) -> dict:
     """Load sync_state.json; return defaults if absent."""
     path = kb_dir / _STATE_FILE
     if not path.exists():
-        return dict(_DEFAULT_STATE)
+        # Deep copy to avoid mutating the default
+        return json.loads(json.dumps(_DEFAULT_STATE))
     try:
         return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
-        return dict(_DEFAULT_STATE)
+        # Deep copy to avoid mutating the default
+        return json.loads(json.dumps(_DEFAULT_STATE))
 
 
 def save_state(state: dict, kb_dir: Path) -> None:
