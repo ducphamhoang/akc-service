@@ -429,10 +429,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
         all_patterns = load_all_patterns()
         if not all_patterns:
             logger.warning("get_pattern_fixes: no patterns in KB")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No patterns found matching category '{request.category}'"
-            )
+            return FixResponse(fixes=[], category=request.category, count=0)
 
         # Filter by category and collect fixes
         matching_fixes = []
@@ -448,10 +445,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
             logger.info(
                 f"get_pattern_fixes: no fixes found for category={request.category}"
             )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No fixes found for category '{request.category}'"
-            )
+            return FixResponse(fixes=[], category=request.category, count=0)
 
         logger.info(
             f"get_pattern_fixes: returned {len(matching_fixes)} fixes "

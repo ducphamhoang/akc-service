@@ -220,7 +220,7 @@ class TestFixEndpoint:
 
     @patch("akc_service.api.routes.load_all_patterns")
     def test_fix_endpoint_no_patterns_found(self, mock_load_patterns, client):
-        """Fix endpoint returns 404 when no patterns match."""
+        """Fix endpoint returns 200 with empty list when no patterns found."""
         mock_load_patterns.return_value = []
 
         payload = {
@@ -228,7 +228,10 @@ class TestFixEndpoint:
             "category": "detection"
         }
         response = client.post("/akc/v1/fix", json=payload)
-        assert response.status_code == 404
+        assert response.status_code == 200
+        data = response.json()
+        assert data["fixes"] == []
+        assert data["count"] == 0
 
     def test_fix_endpoint_invalid_category(self, client):
         """Fix endpoint returns 400 for invalid category."""
@@ -242,7 +245,7 @@ class TestFixEndpoint:
 
     @patch("akc_service.api.routes.load_all_patterns")
     def test_fix_endpoint_no_fixes_in_category(self, mock_load_patterns, client):
-        """Fix endpoint returns 404 when category exists but has no fixes."""
+        """Fix endpoint returns 200 with empty list when category has no fixes."""
         mock_load_patterns.return_value = [
             {
                 "id": "p1",
@@ -256,7 +259,10 @@ class TestFixEndpoint:
             "category": "detection"
         }
         response = client.post("/akc/v1/fix", json=payload)
-        assert response.status_code == 404
+        assert response.status_code == 200
+        data = response.json()
+        assert data["fixes"] == []
+        assert data["count"] == 0
 
     def test_fix_endpoint_missing_fields(self, client):
         """Fix endpoint returns 422 when required fields missing."""
@@ -265,6 +271,34 @@ class TestFixEndpoint:
         }
         response = client.post("/akc/v1/fix", json=payload)
         assert response.status_code == 422
+
+
+class TestFixEndpointEmptyKB:
+    """Tests for /akc/v1/fix endpoint when KB is empty or has no matching category."""
+
+    @patch("akc_service.api.routes.load_all_patterns", return_value=[])
+    def test_fix_returns_empty_list_when_kb_empty(self, mock_load, client):
+        """Fix endpoint returns 200 with empty list when KB is empty."""
+        payload = {"signature_hash": "abc123", "category": "implementation"}
+        response = client.post("/akc/v1/fix", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["fixes"] == []
+        assert data["count"] == 0
+        assert data["category"] == "implementation"
+
+    @patch("akc_service.api.routes.load_all_patterns", return_value=[
+        {"id": "p1", "category": "testing", "confidence": 0.8, "fixes": [{"fix_id": "f1"}]}
+    ])
+    def test_fix_returns_empty_list_when_no_category_match(self, mock_load, client):
+        """Fix endpoint returns 200 with empty list when no patterns match category."""
+        payload = {"signature_hash": "abc123", "category": "implementation"}
+        response = client.post("/akc/v1/fix", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["fixes"] == []
+        assert data["count"] == 0
+        assert data["category"] == "implementation"
 
 
 # ─── Stats Endpoint Tests ────────────────────────────────────────────────────
