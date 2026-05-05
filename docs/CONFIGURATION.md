@@ -553,6 +553,75 @@ echo "Query latency: ${TIME}s"
 
 ---
 
+## Sync Configuration
+
+These variables control optional synchronisation with a remote akc-service instance.
+All sync is disabled (and has zero overhead) when `AKC_SERVICE_REMOTE_URL` is not set.
+
+### AKC_SERVICE_REMOTE_URL
+
+**Type:** URL  
+**Default:** `""` (sync disabled)  
+**Purpose:** Base URL of the remote akc-service instance to sync with.
+
+```bash
+export AKC_SERVICE_REMOTE_URL=https://remote.example.com/akc
+```
+
+### AKC_SERVICE_REMOTE_API_KEY
+
+**Type:** String  
+**Default:** `""` (no auth)  
+**Purpose:** Bearer token sent in `Authorization` header for remote calls.
+
+### AKC_SERVICE_REMOTE_TIMEOUT
+
+**Type:** Integer (seconds)  
+**Default:** `10`  
+**Purpose:** HTTP timeout for all outbound sync calls.
+
+### AKC_SERVICE_SYNC_ON_STARTUP
+
+**Type:** Boolean (`true`/`false`)  
+**Default:** `false`  
+**Purpose:** When `true`, the service pulls from the remote KB before accepting requests.
+
+### AKC_SERVICE_SYNC_PUSH_BATCH
+
+**Type:** Integer  
+**Default:** `50`  
+**Purpose:** Maximum number of patterns sent per push HTTP request.
+
+### AKC_SERVICE_SYNC_MIN_CONFIDENCE
+
+**Type:** Float  
+**Default:** `0.70`  
+**Purpose:** Patterns below this confidence threshold are excluded from push.
+
+### CLI Usage
+
+```bash
+# Check sync state
+akc-sync status
+
+# Pull latest patterns from remote
+akc-sync pull
+
+# Push locally-learned patterns to remote
+akc-sync push
+
+# Preview what would be pushed
+akc-sync push --dry-run
+
+# Configure remote URL
+akc-sync connect --url https://remote.example.com/akc --api-key <token>
+
+# Clear push queue (e.g., after manual reconciliation)
+akc-sync reset-queue
+```
+
+---
+
 ## Related Documentation
 
 - [CAPABILITIES.md](CAPABILITIES.md) — Feature overview
