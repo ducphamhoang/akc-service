@@ -20,6 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field
 import os
 from pathlib import Path
 
+from akc_service.kb_exporter import export_patterns_to_markdown
+from akc_service.config import KB_EXPORT_DIR, KB_EXPORT_FORMAT, KB_EXPORT_MIN_CONFIDENCE
+
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
 KB_DIR = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
 
@@ -778,6 +781,25 @@ class ResetResponse(BaseModel):
     timestamp: str = Field(..., description="ISO 8601 timestamp of reset operation")
 
 
+class KBExportRequest(BaseModel):
+    """Request model for KB markdown export."""
+    export_path: Optional[str] = Field(None, description="Override default export path")
+    organization: str = Field("by-entity", description="Organization strategy: by-entity, by-tier, or by-pattern-type")
+    min_confidence: float = Field(0.0, ge=0.0, le=1.0, description="Minimum confidence threshold")
+    include_demoted: bool = Field(False, description="Include demoted patterns")
+    dry_run: bool = Field(False, description="Validate without writing files")
+
+
+class KBExportResponse(BaseModel):
+    """Response model for KB markdown export."""
+    success: bool = Field(..., description="Export operation success status")
+    patterns_exported: int = Field(..., description="Number of patterns exported")
+    folder: str = Field(..., description="Export folder path")
+    organization: str = Field(..., description="Organization strategy used")
+    exported_at: str = Field(..., description="ISO 8601 export timestamp")
+    error: Optional[str] = Field(None, description="Error message if export failed")
+
+
 @router.post("/reset")
 async def reset_kb(request: ResetRequest) -> ResetResponse:
     """
@@ -879,4 +901,117 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"KB reset failed: {str(e)}"
+        )
+
+
+# ─── KB Export Endpoint ────────────────────────────────────────────────────────
+
+@router.post("/kb/export-markdown")
+async def export_kb_to_markdown(request: KBExportRequest) -> KBExportResponse:
+    """
+    Export KB patterns to markdown files organized by entity, tier, or pattern type.
+
+    Converts patterns.jsonl to a folder structure of markdown files compatible
+    with graphRAG for indexing and knowledge graph construction.
+
+    Args:
+        request: KBExportRequest with organization strategy, confidence threshold,
+                 and optional export path override.
+
+    Returns:
+        KBExportResponse with export metadata and results.
+
+    Raises:
+        HTTPException 400: If organization strategy invalid or min_confidence out of range.
+        HTTPException 404: If patterns.jsonl not found.
+        HTTPException 500: If export fails.
+    """
+    try:
+        # Validate organization strategy
+        valid_organizations = {"by-entity", "by-tier", "by-pattern-type"}
+        if request.organization not in valid_organizations:
+            logger.warning(
+                f"export_kb_to_markdown: invalid organization={request.organization}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"organization must be one of {valid_organizations}, "
+                    f"got '{request.organization}'"
+                )
+            )
+
+        # Validate min_confidence (already bounded by Pydantic, but be explicit)
+        if not (0.0 <= request.min_confidence <= 1.0):
+            logger.warning(
+                f"export_kb_to_markdown: min_confidence={request.min_confidence} out of range"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"min_confidence must be between 0.0 and 1.0, got {request.min_confidence}"
+            )
+
+        # Resolve export path (default to KB_EXPORT_DIR from config)
+        export_path = request.export_path or str(KB_EXPORT_DIR)
+
+        # Check if patterns.jsonl exists
+        patterns_file = PATTERNS_PATH
+        if not patterns_file.exists():
+            logger.warning(
+                f"export_kb_to_markdown: patterns file not found - {patterns_file}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"patterns.jsonl not found at {patterns_file}"
+            )
+
+        logger.info(
+            f"export_kb_to_markdown: organization={request.organization}, "
+            f"min_confidence={request.min_confidence}, "
+            f"include_demoted={request.include_demoted}, "
+            f"dry_run={request.dry_run}, "
+            f"export_path={export_path}"
+        )
+
+        # Call export function
+        result = export_patterns_to_markdown(
+            export_path=export_path,
+            jsonl_path=str(patterns_file),
+            organization=request.organization,
+            min_confidence=request.min_confidence,
+            include_demoted=request.include_demoted,
+            dry_run=request.dry_run
+        )
+
+        # Handle export result
+        if result.get("success"):
+            logger.info(
+                f"export_kb_to_markdown: success — {result.get('patterns_exported')} patterns "
+                f"exported to {result.get('folder')}"
+            )
+            response = KBExportResponse(
+                success=True,
+                patterns_exported=result.get("patterns_exported", 0),
+                folder=result.get("folder", export_path),
+                organization=request.organization,
+                exported_at=result.get("exported_at", now_iso()),
+                error=None
+            )
+        else:
+            error_msg = result.get("error", "Export failed for unknown reason")
+            logger.error(f"export_kb_to_markdown: failed — {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Export failed: {error_msg}"
+            )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"export_kb_to_markdown: unexpected failure — {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"KB export failed: {str(e)}"
         )
