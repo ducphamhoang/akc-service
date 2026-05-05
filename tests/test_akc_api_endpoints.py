@@ -473,14 +473,20 @@ class TestEndpointIntegration:
             assert response.status_code == 200
             assert response.json()["status"] == "healthy"
 
+    @patch("akc_service.api.routes.apply_confidence_delta")
     @patch("akc_service.api.routes.get_active_patterns")
     @patch("akc_service.api.routes.now_iso")
-    def test_query_then_record_flow(self, mock_now_iso, mock_get_patterns, client):
+    def test_query_then_record_flow(self, mock_now_iso, mock_get_patterns, mock_delta, client):
         """Typical flow: query for patterns, then record outcome."""
         mock_get_patterns.return_value = [
             {"id": "p1", "confidence": 0.85, "tier": "gold"}
         ]
         mock_now_iso.return_value = "2026-05-04T10:00:00Z"
+        mock_delta.return_value = {
+            "status": "success",
+            "patterns_updated": 1,
+            "latency_ms": 5
+        }
 
         # Step 1: Query for patterns
         query_payload = {
@@ -501,6 +507,7 @@ class TestEndpointIntegration:
             "status": "success",
             "timestamp": "2026-05-04T10:00:00Z",
             "akc_context": {
+                "akc_enabled": True,
                 "knowledge_patterns_active": patterns
             }
         }
@@ -552,6 +559,11 @@ class TestSLAThreshold:
 class TestRecordDispatchesLearning:
     @patch("akc_service.api.routes.apply_confidence_delta")
     def test_record_dispatches_background_delta(self, mock_delta, client):
+        mock_delta.return_value = {
+            "status": "success",
+            "patterns_updated": 2,
+            "latency_ms": 10
+        }
         payload = {
             "schema_version": "1.0",
             "task_id": "t-learning-001",
@@ -571,6 +583,11 @@ class TestRecordDispatchesLearning:
 
     @patch("akc_service.api.routes.apply_confidence_delta")
     def test_record_failed_status_dispatches_delta(self, mock_delta, client):
+        mock_delta.return_value = {
+            "status": "success",
+            "patterns_updated": 1,
+            "latency_ms": 8
+        }
         payload = {
             "schema_version": "1.0",
             "task_id": "t-learning-002",
@@ -584,6 +601,11 @@ class TestRecordDispatchesLearning:
 
     @patch("akc_service.api.routes.apply_confidence_delta")
     def test_record_empty_patterns_still_returns_202(self, mock_delta, client):
+        mock_delta.return_value = {
+            "status": "success",
+            "patterns_updated": 0,
+            "latency_ms": 2
+        }
         payload = {
             "schema_version": "1.0",
             "task_id": "t-learning-003",

@@ -300,20 +300,21 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
 @router.post("/record", status_code=status.HTTP_202_ACCEPTED)
 async def record_task_outcome(request: RecordRequest, background_tasks: BackgroundTasks) -> RecordResponse:
     """
-    Record a task outcome and trigger learning delta updates (fire-and-forget).
+    Record a task outcome and apply confidence delta updates synchronously.
 
-    Validates schema_version == "1.0", then spawns async or sync KB update based on
-    whether any active pattern has confidence < 0.50 (critical threshold).
+    Validates schema_version == "1.0", then immediately applies confidence deltas
+    to active patterns. Ensures durability: confidence updates reach KB before
+    202 response is returned to client.
 
     Args:
         request: RecordRequest with task_id, status, timestamp, and akc_context.
 
     Returns:
-        RecordResponse 202 Accepted (fire-and-forget; update happens in background).
+        RecordResponse 202 Accepted (update is synchronous and durable).
 
     Raises:
         HTTPException 400: If schema_version != "1.0" or status invalid.
-        HTTPException 500: If serialization or subprocess spawn fails.
+        HTTPException 500: If KB write fails.
     """
     try:
         # Validate schema version
@@ -351,25 +352,30 @@ async def record_task_outcome(request: RecordRequest, background_tasks: Backgrou
             "akc_context": request.akc_context
         }
 
-        # Dispatch learning delta update in background
-        background_tasks.add_task(apply_confidence_delta, task_result)
+        # Apply learning delta update synchronously to ensure durability
+        # Confidence updates must reach KB before 202 response is sent
+        delta_result = apply_confidence_delta(task_result)
 
-        # Determine update mode (async vs sync) based on active patterns
-        # For now, default to async; trigger_learning_delta will handle routing
-        update_mode = "async"
+        # Extract results for response
         active_patterns = request.akc_context.get("knowledge_patterns_active", [])
-        patterns_to_update = len(active_patterns)
+        # Use actual count from delta result if available, else use active pattern count
+        patterns_to_update = (
+            delta_result.get("patterns_updated")
+            if delta_result.get("patterns_updated") is not None
+            else len(active_patterns)
+        )
 
-        # Log outcome recording (actual KB update happens asynchronously)
+        # Log outcome recording with result
         logger.info(
             f"record_task_outcome: accepted task={request.task_id}, "
-            f"patterns_to_update={patterns_to_update}"
+            f"patterns_to_update={patterns_to_update}, "
+            f"delta_status={delta_result.get('status', 'unknown')}"
         )
 
         response = RecordResponse(
             accepted=True,
             task_id=request.task_id,
-            update_mode=update_mode,
+            update_mode="sync",
             patterns_to_update=patterns_to_update,
             timestamp=now_iso()
         )
