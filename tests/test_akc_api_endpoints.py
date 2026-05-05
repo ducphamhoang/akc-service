@@ -596,5 +596,66 @@ class TestRecordDispatchesLearning:
         mock_delta.assert_called_once()
 
 
+class TestSafetyLevelDeltaCap:
+    def _make_task_result(self, status: str, pattern_id: str) -> dict:
+        return {
+            "schema_version": "1.0",
+            "task_id": "t-safety-001",
+            "status": status,
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {
+                "akc_enabled": True,
+                "knowledge_patterns_active": [pattern_id],
+            },
+        }
+
+    def _seed_pattern(self, kb_dir, pid: str, confidence: float):
+        import json
+        pattern = {
+            "id": pid, "entity": "e", "component": "c",
+            "confidence": confidence, "confidence_tier": "production",
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            "version": {"current": "v1", "history": []}, "fixes": [], "category": "other",
+        }
+        (kb_dir / "patterns.jsonl").write_text(json.dumps(pattern) + "\n")
+
+    def test_level_1_success_delta_stays_within_cap(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path
+        import akc_service.config as cfg
+        from akc_service import learning_integration as li
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
+        monkeypatch.setattr(li, "PATTERNS_PATH", tmp_path / "patterns.jsonl")
+        monkeypatch.setattr(cfg, "SAFETY_LEVEL", 1)
+        self._seed_pattern(tmp_path, "p-cap-1", 0.50)
+
+        result = li.apply_confidence_delta(self._make_task_result("success", "p-cap-1"))
+        assert result["status"] == "success"
+        assert result["patterns_updated"] == 1
+
+        lines = (tmp_path / "patterns.jsonl").read_text().strip().split("\n")
+        updated = json.loads(lines[-1])
+        # delta=+0.05, cap=0.15 → new confidence = 0.55
+        assert abs(updated["confidence"] - 0.55) < 0.001
+
+    def test_level_2_success_delta_stays_within_cap(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path
+        import akc_service.config as cfg
+        from akc_service import learning_integration as li
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
+        monkeypatch.setattr(li, "PATTERNS_PATH", tmp_path / "patterns.jsonl")
+        monkeypatch.setattr(cfg, "SAFETY_LEVEL", 2)
+        self._seed_pattern(tmp_path, "p-cap-2", 0.50)
+
+        result = li.apply_confidence_delta(self._make_task_result("success", "p-cap-2"))
+        assert result["status"] == "success"
+
+        lines = (tmp_path / "patterns.jsonl").read_text().strip().split("\n")
+        updated = json.loads(lines[-1])
+        # delta=+0.05, cap=0.10 → new confidence = 0.55
+        assert abs(updated["confidence"] - 0.55) < 0.001
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

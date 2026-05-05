@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import os
+from akc_service.config import SAFETY_LEVEL, max_delta_for_level
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
 KB_DIR = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
 _REPO_ROOT = Path(os.environ.get("AKC_SERVICE_REPO_ROOT", str(Path.cwd())))
@@ -494,6 +495,10 @@ def apply_confidence_delta(task_result: dict) -> dict:
             "patterns_updated": 0,
             "latency_ms": 0
         }
+
+    # Apply safety level cap to delta
+    max_allowed = max_delta_for_level(SAFETY_LEVEL)
+    delta = max(min(delta, max_allowed), -max_allowed)
 
     # Extract patterns to update from akc_context
     akc_context = task_result.get("akc_context", {})
