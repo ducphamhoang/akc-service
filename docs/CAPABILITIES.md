@@ -136,7 +136,7 @@ Extended validation for code quality and safety.
 
 ### 7. REST API
 
-Five endpoints expose akc-service to agents and external systems.
+Ten endpoints expose akc-service to agents and external systems.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -146,6 +146,11 @@ Five endpoints expose akc-service to agents and external systems.
 | POST | `/akc/v1/fix` | Get fix recommendations by category |
 | GET | `/akc/v1/stats` | KB statistics and SLA status |
 | POST | `/akc/v1/update` | Manual confidence override |
+| GET  | `/akc/v1/sync/status`  | Sync queue state and remote reachability |
+| GET  | `/akc/v1/sync/export`  | Export local patterns for remote pull |
+| POST | `/akc/v1/sync/push`    | Push local patterns to remote KB |
+| POST | `/akc/v1/sync/pull`    | Pull patterns from remote KB |
+| POST | `/akc/v1/sync/receive` | Receive patterns pushed from remote node |
 
 **Features:**
 - JSON request/response with Pydantic validation
@@ -174,6 +179,42 @@ adapter.record_test_result(test_result, scene_path)     # HTTP 202
 ```
 
 See `adapters/godot/README.md` for setup and examples.
+
+### 9. External KB Sync
+
+Optional synchronisation layer for connecting local and remote akc-service instances.
+
+**What it does:**
+- Runs standalone with zero overhead when `AKC_SERVICE_REMOTE_URL` is not set
+- Maintains a write-ahead buffer: newly learned patterns (above confidence threshold) are queued locally in `sync_state.json`
+- Pushes queued patterns to the remote KB in batches via `POST /akc/v1/sync/receive`
+- Pulls patterns from the remote KB with configurable conflict resolution (local wins by default)
+- Exposes sync state and remote reachability via `GET /akc/v1/sync/status`
+
+**Conflict resolution (pull):**
+- Default: keep local pattern if `local_confidence >= remote_confidence`
+- `overwrite_local=True`: remote always wins
+
+**CLI (`akc-sync`):**
+```bash
+akc-sync status          # show queue and cursors
+akc-sync push            # push pending patterns to remote
+akc-sync push --dry-run  # preview without sending
+akc-sync pull            # pull remote patterns into local KB
+akc-sync connect --url <url> --api-key <key>
+akc-sync reset-queue     # clear push queue
+```
+
+**Files:**
+- `sync_state.json` — push/pull cursors, pending queue, error log
+- `confidence_history.jsonl` — sync conflicts logged with `update_type: "sync_conflict"`
+
+**Key operations:**
+```python
+push_to_remote(kb_dir, remote_url, api_key, min_confidence, batch_size, dry_run)
+pull_from_remote(kb_dir, remote_url, api_key, since, overwrite_local, dry_run)
+sync_enabled()   # True only when AKC_SERVICE_REMOTE_URL is set
+```
 
 ## System Architecture
 

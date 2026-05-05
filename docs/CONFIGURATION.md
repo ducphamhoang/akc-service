@@ -113,6 +113,19 @@ export AKC_SERVICE_URL=https://api.example.com/akc
 - Godot adapter
 - External integrations
 
+#### AKC_SERVICE_LOG_LEVEL
+
+**Type:** String  
+**Default:** `INFO`  
+**Purpose:** Server log verbosity level.
+
+**Values:** `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+
+**Example:**
+```bash
+export AKC_SERVICE_LOG_LEVEL=DEBUG
+```
+
 ---
 
 ## Performance Tuning

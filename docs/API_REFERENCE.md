@@ -18,6 +18,11 @@ All examples assume akc-service is running locally on port 8000.
 | POST | `/fix` | Get fix recommendations by category | < 100ms |
 | GET | `/stats` | KB statistics and SLA status | < 100ms |
 | POST | `/update` | Manual confidence override | < 100ms |
+| GET  | `/sync/status`  | Sync queue state and remote reachability | < 50ms |
+| GET  | `/sync/export`  | Export local patterns (used by remote pull) | < 100ms |
+| POST | `/sync/push`    | Push queued patterns to remote KB | < 30s |
+| POST | `/sync/pull`    | Pull patterns from remote KB | < 30s |
+| POST | `/sync/receive` | Inbound: accept patterns from remote node | < 100ms |
 
 ---
 
@@ -771,6 +776,150 @@ curl -s -X POST "$BASE_URL/record" \
   }'
 
 echo "Recorded"
+```
+
+---
+
+## Sync Endpoints
+
+These endpoints are only meaningful when `AKC_SERVICE_REMOTE_URL` is configured. Push and pull return HTTP 503 when sync is disabled.
+
+---
+
+### GET /sync/status
+
+Returns current sync state: remote URL, reachability, push queue size, and last sync timestamps.
+
+#### Response
+
+```json
+{
+  "remote_url": "https://remote.example.com/akc",
+  "connected": true,
+  "remote_reachable": true,
+  "last_push_at": "2026-05-05T12:00:00Z",
+  "last_pull_at": "2026-05-05T11:00:00Z",
+  "push_queue_size": 3
+}
+```
+
+---
+
+### GET /sync/export
+
+Export local patterns for consumption by a remote pull. Optionally filter by `since` (ISO 8601 timestamp).
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `since` | string | No | ISO 8601 timestamp — only return patterns updated after this time |
+
+#### Response
+
+```json
+{
+  "patterns": [...],
+  "count": 42,
+  "as_of": "2026-05-05T14:00:00Z"
+}
+```
+
+---
+
+### POST /sync/push
+
+Push locally-queued patterns (confidence ≥ `min_confidence`) to the remote KB in batches.
+
+Returns HTTP 503 when `AKC_SERVICE_REMOTE_URL` is not set.
+
+#### Request Body
+
+```json
+{
+  "min_confidence": 0.70,
+  "batch_size": 50,
+  "dry_run": false
+}
+```
+
+All fields are optional (defaults shown).
+
+#### Response
+
+```json
+{
+  "pushed": 12,
+  "skipped": 3,
+  "errors": 0,
+  "cursor": "2026-05-05T12:00:00Z"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `pushed` | Patterns successfully sent |
+| `skipped` | Patterns below `min_confidence` threshold |
+| `errors` | Batches that failed (network errors, non-200 responses) |
+| `cursor` | `updated_at` of the latest pushed pattern |
+| `would_push` | (dry_run only) Count of patterns that would be sent |
+
+---
+
+### POST /sync/pull
+
+Pull patterns from the remote KB into the local KB.
+
+Returns HTTP 503 when `AKC_SERVICE_REMOTE_URL` is not set.
+
+#### Request Body
+
+```json
+{
+  "since": null,
+  "overwrite_local": false,
+  "dry_run": false
+}
+```
+
+#### Response
+
+```json
+{
+  "pulled": 8,
+  "conflicts": 2,
+  "errors": 0
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `pulled` | Patterns written to local KB |
+| `conflicts` | Patterns where local was kept (local confidence ≥ remote) |
+| `errors` | HTTP errors during the pull |
+
+---
+
+### POST /sync/receive
+
+Inbound endpoint — accepts a batch of patterns pushed from a remote node. Called automatically by the remote's `/sync/push`; not normally called directly.
+
+#### Request Body
+
+```json
+{
+  "patterns": [...],
+  "pushed_at": "2026-05-05T12:00:00Z"
+}
+```
+
+#### Response
+
+```json
+{
+  "accepted": 12,
+  "total": 12
+}
 ```
 
 ---
