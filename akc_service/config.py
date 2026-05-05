@@ -23,13 +23,10 @@ def _read_safety_level() -> int:
     raw = os.environ.get("AKC_SERVICE_SAFETY_LEVEL", "1")
     try:
         level = int(raw)
-        # Clamp to valid range [0, 1, 2]
         if level in (0, 1, 2):
             return level
-        # Fall back to 1 if out of range
         return 1
     except (ValueError, TypeError):
-        # Fall back to 1 on non-integer values
         return 1
 
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Configuration Module Tests
 
@@ -8,6 +7,7 @@ and defaults.
 
 import os
 import importlib
+from pathlib import Path
 import pytest
 
 
@@ -29,7 +29,6 @@ class TestKBDir:
         import akc_service.config as cfg
         importlib.reload(cfg)
 
-        from pathlib import Path
         expected = Path(__file__).parent.parent / "akc_service" / "kb"
         assert cfg.KB_DIR == expected
 
@@ -70,17 +69,10 @@ class TestSafetyLevel:
             importlib.reload(cfg)
             assert cfg.SAFETY_LEVEL == level
 
-    def test_safety_level_invalid_falls_back_to_1(self, monkeypatch, clean_config):
+    @pytest.mark.parametrize("bad_val", ["banana", "3.14", "99"])
+    def test_safety_level_bad_input_falls_back_to_1(self, monkeypatch, clean_config, bad_val):
         """SAFETY_LEVEL falls back to 1 on invalid input."""
-        monkeypatch.setenv("AKC_SERVICE_SAFETY_LEVEL", "banana")
-        import akc_service.config as cfg
-        importlib.reload(cfg)
-
-        assert cfg.SAFETY_LEVEL == 1
-
-    def test_safety_level_invalid_non_integer_falls_back(self, monkeypatch, clean_config):
-        """SAFETY_LEVEL falls back to 1 on non-integer input."""
-        monkeypatch.setenv("AKC_SERVICE_SAFETY_LEVEL", "3.14")
+        monkeypatch.setenv("AKC_SERVICE_SAFETY_LEVEL", bad_val)
         import akc_service.config as cfg
         importlib.reload(cfg)
 
