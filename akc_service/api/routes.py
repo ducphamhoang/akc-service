@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, Field
 
 # Package-relative imports — no sys.path manipulation needed
@@ -31,6 +31,7 @@ from akc_service.learning_integration import (
     check_latency,
     now_iso,
     determine_tier,
+    apply_confidence_delta,
 )
 
 
@@ -297,7 +298,7 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
 # ─── Task Outcome Recording Endpoint ───────────────────────────────────────
 
 @router.post("/record", status_code=status.HTTP_202_ACCEPTED)
-async def record_task_outcome(request: RecordRequest) -> RecordResponse:
+async def record_task_outcome(request: RecordRequest, background_tasks: BackgroundTasks) -> RecordResponse:
     """
     Record a task outcome and trigger learning delta updates (fire-and-forget).
 
@@ -349,6 +350,9 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
             "timestamp": request.timestamp,
             "akc_context": request.akc_context
         }
+
+        # Dispatch learning delta update in background
+        background_tasks.add_task(apply_confidence_delta, task_result)
 
         # Determine update mode (async vs sync) based on active patterns
         # For now, default to async; trigger_learning_delta will handle routing

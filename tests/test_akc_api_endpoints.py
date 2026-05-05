@@ -482,7 +482,6 @@ class TestSLAThreshold:
         """SLA status should be WARNING when latency exceeds 50ms."""
         from akc_service import learning_integration as li
         import json
-        from pathlib import Path
 
         # Create confidence history file
         latency_file = tmp_path / "confidence_history.jsonl"
@@ -501,7 +500,6 @@ class TestSLAThreshold:
         """SLA status should be HEALTHY when all latency under 50ms."""
         from akc_service import learning_integration as li
         import json
-        from pathlib import Path
 
         # Create confidence history file
         latency_file = tmp_path / "confidence_history.jsonl"
@@ -515,6 +513,53 @@ class TestSLAThreshold:
 
         result = li.check_latency()
         assert result["sla_status"] == "HEALTHY"
+
+
+class TestRecordDispatchesLearning:
+    @patch("akc_service.api.routes.apply_confidence_delta")
+    def test_record_dispatches_background_delta(self, mock_delta, client):
+        payload = {
+            "schema_version": "1.0",
+            "task_id": "t-learning-001",
+            "status": "success",
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {
+                "akc_enabled": True,
+                "knowledge_patterns_active": ["pattern_001", "pattern_002"]
+            }
+        }
+        response = client.post("/akc/v1/record", json=payload)
+        assert response.status_code == 202
+        mock_delta.assert_called_once()
+        call_arg = mock_delta.call_args[0][0]
+        assert call_arg["task_id"] == "t-learning-001"
+        assert call_arg["status"] == "success"
+
+    @patch("akc_service.api.routes.apply_confidence_delta")
+    def test_record_failed_status_dispatches_delta(self, mock_delta, client):
+        payload = {
+            "schema_version": "1.0",
+            "task_id": "t-learning-002",
+            "status": "failed",
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {"akc_enabled": True, "knowledge_patterns_active": ["pattern_001"]}
+        }
+        response = client.post("/akc/v1/record", json=payload)
+        assert response.status_code == 202
+        mock_delta.assert_called_once()
+
+    @patch("akc_service.api.routes.apply_confidence_delta")
+    def test_record_empty_patterns_still_returns_202(self, mock_delta, client):
+        payload = {
+            "schema_version": "1.0",
+            "task_id": "t-learning-003",
+            "status": "success",
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {"akc_enabled": True, "knowledge_patterns_active": []}
+        }
+        response = client.post("/akc/v1/record", json=payload)
+        assert response.status_code == 202
+        mock_delta.assert_called_once()
 
 
 if __name__ == "__main__":
