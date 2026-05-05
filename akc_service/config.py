@@ -18,6 +18,7 @@ KB_DIR: Path = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
 
 # ─── KB Export Configuration ─────────────────────────────────────────────────
 
+PATTERNS_JSONL: Path = KB_DIR / "patterns.jsonl"
 KB_EXPORT_DIR: Path = Path(os.environ.get("AKC_SERVICE_KB_EXPORT_DIR", "./kb_export"))
 KB_EXPORT_FORMAT: str = os.environ.get("AKC_SERVICE_KB_EXPORT_FORMAT", "by-entity")
 KB_EXPORT_MIN_CONFIDENCE: float = float(os.environ.get("AKC_SERVICE_KB_EXPORT_MIN_CONFIDENCE", "0.0"))

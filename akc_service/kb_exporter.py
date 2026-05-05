@@ -504,32 +504,42 @@ For more information, see the individual pattern files.
     return index_content
 
 
-def main():
-    """CLI entry point for kb_exporter."""
+if __name__ == "__main__":
+    from akc_service.config import PATTERNS_JSONL, KB_EXPORT_DIR, KB_EXPORT_FORMAT, KB_EXPORT_MIN_CONFIDENCE
+
     parser = argparse.ArgumentParser(
-        description="Export curator patterns to markdown files for graphRAG"
+        description="Export curator patterns to markdown files for graphRAG",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python -m akc_service.kb_exporter --export-path ./kb_export
+  python -m akc_service.kb_exporter --export-path ./kb_export --organization by-tier --min-confidence 0.7
+  python -m akc_service.kb_exporter --export-path ./kb_export --dry-run
+        """
     )
     parser.add_argument(
         "--export-path",
-        required=True,
-        help="Target directory for exported markdown files"
+        type=Path,
+        default=KB_EXPORT_DIR,
+        help=f"Target directory for exported markdown files (default: {KB_EXPORT_DIR})"
     )
     parser.add_argument(
-        "--jsonl-path",
-        default="./akc_service/kb/patterns.jsonl",
-        help="Source JSONL file with patterns (default: ./akc_service/kb/patterns.jsonl)"
+        "--patterns-file",
+        type=Path,
+        default=PATTERNS_JSONL,
+        help=f"Source JSONL file with patterns (default: {PATTERNS_JSONL})"
     )
     parser.add_argument(
         "--organization",
         choices=["by-entity", "by-tier", "by-pattern-type"],
-        default="by-entity",
-        help="Organization strategy (default: by-entity)"
+        default=KB_EXPORT_FORMAT,
+        help=f"Organization strategy (default: {KB_EXPORT_FORMAT})"
     )
     parser.add_argument(
         "--min-confidence",
         type=float,
-        default=0.0,
-        help="Minimum confidence threshold (0.0-1.0, default: 0.0)"
+        default=KB_EXPORT_MIN_CONFIDENCE,
+        help=f"Minimum confidence threshold (0.0-1.0, default: {KB_EXPORT_MIN_CONFIDENCE})"
     )
     parser.add_argument(
         "--include-demoted",
@@ -551,28 +561,23 @@ def main():
 
     # Run export
     result = export_patterns_to_markdown(
-        export_path=args.export_path,
-        jsonl_path=args.jsonl_path,
+        export_path=str(args.export_path),
+        jsonl_path=str(args.patterns_file),
         organization=args.organization,
         min_confidence=args.min_confidence,
         include_demoted=args.include_demoted,
         dry_run=args.dry_run
     )
 
-    # Print result
+    # Print result dict
+    print(json.dumps(result, indent=2, default=str))
+
+    # Print summary
     if result["success"]:
-        if args.dry_run:
-            print(f"[DRY RUN] Would export {result['patterns_exported']} patterns to {result['folder']}")
-            print(f"[DRY RUN] Organization: {result['organization']}")
-        else:
-            print(f"✓ Exported {result['patterns_exported']} patterns to {result['folder']}")
-            print(f"✓ Organization: {result['organization']}")
-            print(f"✓ Timestamp: {result['exported_at']}")
+        patterns_count = result['patterns_exported']
+        folder = result['folder']
+        print(f"✓ Exported {patterns_count} patterns to {folder}")
         sys.exit(0)
     else:
-        print(f"✗ Export failed: {result['error']}", file=sys.stderr)
+        print("✗ Export failed", file=sys.stderr)
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
