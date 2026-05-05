@@ -20,10 +20,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .routes import router
+from akc_service.config import LOG_LEVEL
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stderr)

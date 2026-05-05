@@ -99,3 +99,18 @@ def test_fallback_on_connection_error():
                 f"record_lint_result raised {type(exc).__name__} on connection error: {exc}"
             )
     # If we reach here, fallback worked correctly
+
+
+def test_adapter_reads_akc_url_from_env(monkeypatch):
+    """Adapter reads AKC_SERVICE_URL from environment variable."""
+    monkeypatch.setenv("AKC_SERVICE_URL", "http://remote-host:9000")
+    adapter = GodotAKCAdapter()
+    assert adapter.akc_url == "http://remote-host:9000"
+    assert "remote-host:9000" in adapter.record_endpoint
+
+
+def test_adapter_explicit_url_overrides_env(monkeypatch):
+    """Explicit akc_url argument overrides AKC_SERVICE_URL env var."""
+    monkeypatch.setenv("AKC_SERVICE_URL", "http://remote-host:9000")
+    adapter = GodotAKCAdapter(akc_url="http://explicit:8888")
+    assert adapter.akc_url == "http://explicit:8888"

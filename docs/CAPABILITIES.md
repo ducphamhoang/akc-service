@@ -169,8 +169,8 @@ Integration bridge for Godot game engine.
 ```gdscript
 # In GDScript
 var adapter = GodotAKCAdapter.new()
-adapter.record_lint_results(linting_data)  # HTTP 202
-adapter.record_test_results(test_data)     # HTTP 202
+adapter.record_lint_result(lint_result, file_path)  # HTTP 202
+adapter.record_test_result(test_result, scene_path)     # HTTP 202
 ```
 
 See `adapters/godot/README.md` for setup and examples.

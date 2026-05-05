@@ -24,12 +24,15 @@ class GodotAKCAdapter:
     Connection refused and timeouts are swallowed with a warning log.
     """
 
-    def __init__(self, akc_url: str = "http://localhost:8000") -> None:
+    def __init__(self, akc_url: str = "") -> None:
         """Initialize the adapter.
 
         Args:
             akc_url: Base URL of the running akc-service instance.
+                     If not provided, reads from AKC_SERVICE_URL env var.
         """
+        if not akc_url:
+            akc_url = os.environ.get("AKC_SERVICE_URL", "http://localhost:8000")
         self.akc_url = akc_url.rstrip("/")
         self.record_endpoint = f"{self.akc_url}/akc/v1/record"
         self.logger = logging.getLogger(__name__)
