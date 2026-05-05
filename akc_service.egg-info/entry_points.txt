@@ -1,0 +1,2 @@
+[console_scripts]
+akc-service = akc_service.api.main:main
