@@ -128,8 +128,8 @@ class TestRecordEndpoint:
     """Tests for /akc/v1/record endpoint."""
 
     @patch("akc_service.api.routes.now_iso")
-    def test_record_endpoint_returns_202(self, mock_now_iso, client):
-        """Record endpoint returns 202 Accepted."""
+    def test_record_endpoint_returns_200(self, mock_now_iso, client):
+        """Record endpoint returns 200 OK (synchronous, durable write)."""
         mock_now_iso.return_value = "2026-05-04T10:00:00Z"
 
         payload = {
@@ -142,7 +142,7 @@ class TestRecordEndpoint:
             }
         }
         response = client.post("/akc/v1/record", json=payload)
-        assert response.status_code == 202
+        assert response.status_code == 200
 
         data = response.json()
         assert data["accepted"] is True
@@ -306,9 +306,11 @@ class TestFixEndpointEmptyKB:
 class TestStatsEndpoint:
     """Tests for /akc/v1/stats endpoint."""
 
+    @patch("akc_service.api.routes.count_history_patterns_in_window")
     @patch("akc_service.api.routes.load_all_patterns")
     @patch("akc_service.api.routes.check_latency")
-    def test_stats_endpoint_success(self, mock_check_latency, mock_load_patterns, client):
+    def test_stats_endpoint_success(self, mock_check_latency, mock_load_patterns,
+                                    mock_count_window, client):
         """Stats endpoint returns 200 with statistics."""
         mock_check_latency.return_value = {
             "sample_count": 100,
@@ -324,6 +326,7 @@ class TestStatsEndpoint:
             {"id": "p1", "confidence": 0.85, "confidence_tier": "gold"},
             {"id": "p2", "confidence": 0.72, "confidence_tier": "production"}
         ]
+        mock_count_window.return_value = {"patterns_updated": 2, "total_updates": 10}
 
         response = client.get("/akc/v1/stats")
         assert response.status_code == 200
@@ -337,27 +340,95 @@ class TestStatsEndpoint:
         assert data["gold_tier_count"] == 1
         assert "avg_confidence" in data
         assert data["avg_confidence"] == 0.785
+        # New fields
+        assert "patterns_updated" in data
+        assert "time_window" in data
+        assert data["time_window"] == "all"
+        assert data["patterns_updated"] == 2
 
+    @patch("akc_service.api.routes.count_history_patterns_in_window")
     @patch("akc_service.api.routes.load_all_patterns")
     @patch("akc_service.api.routes.check_latency")
-    def test_stats_endpoint_with_time_window(self, mock_check_latency, mock_load_patterns, client):
-        """Stats endpoint accepts time_window query parameter."""
+    def test_stats_endpoint_with_time_window(self, mock_check_latency, mock_load_patterns,
+                                             mock_count_window, client):
+        """Stats endpoint filters latency and update counts by time_window."""
         mock_check_latency.return_value = {
             "sample_count": 50,
             "latency_stats": {"min": 5.0, "max": 30.0, "avg": 12.0, "p95": 25.0},
             "sla_status": "HEALTHY"
         }
         mock_load_patterns.return_value = []
+        mock_count_window.return_value = {"patterns_updated": 3, "total_updates": 7}
 
         response = client.get("/akc/v1/stats?time_window=24h")
         assert response.status_code == 200
 
         data = response.json()
         assert data["sample_count"] == 50
+        assert data["time_window"] == "24h"
+        assert data["patterns_updated"] == 3
 
+        # Verify check_latency and count_history_patterns_in_window were called
+        # with a non-None cutoff_time (i.e. actually filtered)
+        call_kwargs_latency = mock_check_latency.call_args
+        assert call_kwargs_latency is not None
+        cutoff_arg = call_kwargs_latency.kwargs.get("cutoff_time")
+        assert cutoff_arg is not None, "check_latency should receive a cutoff_time for 24h window"
+
+        call_kwargs_count = mock_count_window.call_args
+        assert call_kwargs_count is not None
+        cutoff_arg2 = call_kwargs_count.kwargs.get("cutoff_time")
+        assert cutoff_arg2 is not None, "count_history_patterns_in_window should receive a cutoff_time for 24h window"
+
+    @patch("akc_service.api.routes.count_history_patterns_in_window")
     @patch("akc_service.api.routes.load_all_patterns")
     @patch("akc_service.api.routes.check_latency")
-    def test_stats_endpoint_empty_kb(self, mock_check_latency, mock_load_patterns, client):
+    def test_stats_endpoint_all_window_passes_none_cutoff(self, mock_check_latency,
+                                                          mock_load_patterns,
+                                                          mock_count_window, client):
+        """With time_window=all, check_latency receives cutoff_time=None (no filter)."""
+        mock_check_latency.return_value = {
+            "sample_count": 200,
+            "latency_stats": {},
+            "sla_status": "HEALTHY"
+        }
+        mock_load_patterns.return_value = []
+        mock_count_window.return_value = {"patterns_updated": 0, "total_updates": 0}
+
+        response = client.get("/akc/v1/stats?time_window=all")
+        assert response.status_code == 200
+
+        call_kwargs = mock_check_latency.call_args
+        cutoff_arg = call_kwargs.kwargs.get("cutoff_time")
+        assert cutoff_arg is None, "check_latency should receive cutoff_time=None for 'all' window"
+
+    def test_stats_endpoint_invalid_time_window_returns_400(self, client):
+        """Stats endpoint returns 400 for unrecognised time_window values."""
+        response = client.get("/akc/v1/stats?time_window=bogus")
+        assert response.status_code == 400
+        data = response.json()
+        # The global exception handler returns {"error": ...}
+        assert "error" in data
+        assert "bogus" in data["error"]
+
+    def test_stats_endpoint_accepts_1h_window(self, client):
+        """Stats endpoint accepts the '1h' time_window value."""
+        with patch("akc_service.api.routes.check_latency") as mock_lat, \
+             patch("akc_service.api.routes.load_all_patterns") as mock_pat, \
+             patch("akc_service.api.routes.count_history_patterns_in_window") as mock_cnt:
+            mock_lat.return_value = {"sample_count": 5, "latency_stats": {}, "sla_status": "HEALTHY"}
+            mock_pat.return_value = []
+            mock_cnt.return_value = {"patterns_updated": 1, "total_updates": 2}
+
+            response = client.get("/akc/v1/stats?time_window=1h")
+            assert response.status_code == 200
+            assert response.json()["time_window"] == "1h"
+
+    @patch("akc_service.api.routes.count_history_patterns_in_window")
+    @patch("akc_service.api.routes.load_all_patterns")
+    @patch("akc_service.api.routes.check_latency")
+    def test_stats_endpoint_empty_kb(self, mock_check_latency, mock_load_patterns,
+                                     mock_count_window, client):
         """Stats endpoint handles empty KB gracefully."""
         mock_check_latency.return_value = {
             "sample_count": 0,
@@ -365,6 +436,7 @@ class TestStatsEndpoint:
             "sla_status": "UNKNOWN"
         }
         mock_load_patterns.return_value = []
+        mock_count_window.return_value = {"patterns_updated": 0, "total_updates": 0}
 
         response = client.get("/akc/v1/stats")
         assert response.status_code == 200
@@ -372,6 +444,7 @@ class TestStatsEndpoint:
         data = response.json()
         assert data["sample_count"] == 0
         assert data["avg_confidence"] == 0.0
+        assert data["patterns_updated"] == 0
 
 
 # ─── Update Endpoint Tests ───────────────────────────────────────────────────
@@ -512,7 +585,7 @@ class TestEndpointIntegration:
             }
         }
         record_response = client.post("/akc/v1/record", json=record_payload)
-        assert record_response.status_code == 202
+        assert record_response.status_code == 200
         assert record_response.json()["patterns_to_update"] == 1
 
 
@@ -575,7 +648,7 @@ class TestRecordDispatchesLearning:
             }
         }
         response = client.post("/akc/v1/record", json=payload)
-        assert response.status_code == 202
+        assert response.status_code == 200
         mock_delta.assert_called_once()
         call_arg = mock_delta.call_args[0][0]
         assert call_arg["task_id"] == "t-learning-001"
@@ -596,11 +669,11 @@ class TestRecordDispatchesLearning:
             "akc_context": {"akc_enabled": True, "knowledge_patterns_active": ["pattern_001"]}
         }
         response = client.post("/akc/v1/record", json=payload)
-        assert response.status_code == 202
+        assert response.status_code == 200
         mock_delta.assert_called_once()
 
     @patch("akc_service.api.routes.apply_confidence_delta")
-    def test_record_empty_patterns_still_returns_202(self, mock_delta, client):
+    def test_record_empty_patterns_still_returns_200(self, mock_delta, client):
         mock_delta.return_value = {
             "status": "success",
             "patterns_updated": 0,
@@ -614,8 +687,112 @@ class TestRecordDispatchesLearning:
             "akc_context": {"akc_enabled": True, "knowledge_patterns_active": []}
         }
         response = client.post("/akc/v1/record", json=payload)
-        assert response.status_code == 202
+        assert response.status_code == 200
         mock_delta.assert_called_once()
+
+
+class TestRecordDurability:
+    """
+    Verify that /record writes reach the KB before the 200 response is returned.
+
+    The core guarantee: if the process were to restart immediately after receiving
+    the 200, the confidence update would already be on disk.  We test this by
+    calling apply_confidence_delta for real (no mock) on a tmp KB and asserting
+    that patterns.jsonl contains the updated entry after the response.
+    """
+
+    def _seed_pattern(self, kb_dir, pid: str, confidence: float):
+        import json
+        pattern = {
+            "id": pid, "entity": "e", "component": "c",
+            "confidence": confidence, "confidence_tier": "production",
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            "version": {"current": "v1", "history": []}, "fixes": [], "category": "other",
+        }
+        (kb_dir / "patterns.jsonl").write_text(json.dumps(pattern) + "\n")
+
+    def test_kb_written_before_200_returned(self, tmp_path, monkeypatch):
+        """
+        POST /record must write to KB before returning 200.
+
+        Approach: patch PATTERNS_PATH and CONFIDENCE_HISTORY_PATH to tmp_path,
+        seed one pattern, call the real endpoint, then read patterns.jsonl back
+        and assert a second entry (the confidence update) exists.
+        """
+        import json as _json
+        from akc_service import learning_integration as li
+
+        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
+        monkeypatch.setattr(li, "PATTERNS_PATH", tmp_path / "patterns.jsonl")
+        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", tmp_path / "confidence_history.jsonl")
+
+        self._seed_pattern(tmp_path, "p-dur-1", 0.70)
+
+        from fastapi.testclient import TestClient
+        from akc_service.api.main import app
+        client = TestClient(app)
+
+        payload = {
+            "schema_version": "1.0",
+            "task_id": "t-durability-001",
+            "status": "success",
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {
+                "akc_enabled": True,
+                "knowledge_patterns_active": ["p-dur-1"],
+            },
+        }
+        response = client.post("/akc/v1/record", json=payload)
+
+        # 200 means write completed synchronously
+        assert response.status_code == 200
+
+        # Verify KB was actually updated on disk
+        lines = (tmp_path / "patterns.jsonl").read_text().strip().split("\n")
+        assert len(lines) >= 2, "Expected original + updated entry in patterns.jsonl"
+
+        updated = _json.loads(lines[-1])
+        assert updated["id"] == "p-dur-1"
+        # success delta = +0.05 → 0.70 + 0.05 = 0.75
+        assert abs(updated["confidence"] - 0.75) < 0.001, (
+            f"Expected confidence 0.75, got {updated['confidence']}"
+        )
+
+    def test_kb_write_failure_returns_500_not_200(self, tmp_path, monkeypatch):
+        """
+        If the KB write fails, endpoint must return 500, not 200.
+
+        A 200 with a failed write would be a silent data-loss bug.
+        """
+        from akc_service import learning_integration as li
+        from unittest.mock import patch
+
+        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
+        monkeypatch.setattr(li, "PATTERNS_PATH", tmp_path / "patterns.jsonl")
+        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", tmp_path / "confidence_history.jsonl")
+
+        from fastapi.testclient import TestClient
+        from akc_service.api.main import app
+        client = TestClient(app)
+
+        payload = {
+            "schema_version": "1.0",
+            "task_id": "t-durability-002",
+            "status": "success",
+            "timestamp": "2026-05-05T10:00:00Z",
+            "akc_context": {
+                "akc_enabled": True,
+                "knowledge_patterns_active": ["p-dur-2"],
+            },
+        }
+
+        # Force apply_confidence_delta to raise an IOError (simulates disk full / permissions)
+        with patch("akc_service.api.routes.apply_confidence_delta", side_effect=IOError("disk full")):
+            response = client.post("/akc/v1/record", json=payload)
+
+        assert response.status_code == 500
 
 
 class TestSafetyLevelDeltaCap:

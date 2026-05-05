@@ -71,7 +71,8 @@ def now_iso() -> str:
 
 
 def make_history_id() -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+    """Generate a unique history ID from current timestamp with millisecond precision."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S.%f")[:-3]  # millisecond precision
     return f"ch-{ts}"
 
 
@@ -200,11 +201,11 @@ def update_confidence(
     pattern["updated_at"] = now_iso()
 
     # Guardrail protection: gold tier patterns get protected flag
-    if new_confidence > 0.85:
+    if new_confidence >= 0.85:
         pattern["guardrail_protected"] = True
-    elif new_confidence <= 0.85 and pattern.get("guardrail_protected"):
+    elif new_confidence < 0.85 and pattern.get("guardrail_protected"):
         # Only remove if explicitly demoted below gold threshold
-        if old_confidence > 0.85 and new_confidence <= 0.85:
+        if old_confidence >= 0.85 and new_confidence < 0.85:
             pattern["guardrail_protected"] = False
 
     # Task 1.19/1.20: Auto-promotion / auto-demotion
@@ -291,15 +292,11 @@ def version_pattern(pattern_id: str, fix_id: str, change_reason: str = None) -> 
     version_info = pattern.get("version", {"current": "v1", "history": []})
     current_version = version_info.get("current", "v1")
 
-    # Determine next version
-    version_nums = {"v1": 1, "v2": 2, "v3": 3, "v4": 4, "v5": 5}
-    current_num = version_nums.get(current_version, 1)
-
-    if current_num >= 5:
-        return {
-            "error": "Maximum versions (v5) reached — manual intervention required",
-            "success": False,
-        }
+    # Determine next version (no ceiling - patterns can learn indefinitely)
+    try:
+        current_num = int(current_version[1:])  # Extract number from "v1", "v2", etc.
+    except (ValueError, IndexError):
+        current_num = 1  # Default fallback
 
     next_version = f"v{current_num + 1}"
 
@@ -688,7 +685,7 @@ def _compute_learning_speed(patterns: list, history: list) -> float:
     """Avg days from pattern creation to gold confidence."""
     gold_times = []
     for p in patterns:
-        if p.get("confidence_tier") != "gold" and p.get("confidence", 0) <= 0.85:
+        if p.get("confidence_tier") != "gold" and p.get("confidence", 0) < 0.85:
             continue
         created = p.get("created_at", "")
         updated = p.get("updated_at", "")

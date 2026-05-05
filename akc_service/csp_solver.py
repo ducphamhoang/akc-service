@@ -104,7 +104,7 @@ GUARDRAILS = {
         "blocks": ["integer_literal_in_collision_layer", "hardcoded_physics_value"],
     },
     "G6_high_confidence_patterns": {
-        "description": "Never modify patterns with confidence > 0.85 without override_key",
+        "description": "Never modify patterns with confidence >= 0.85 without override_key",
         "blocks": ["high_confidence_pattern_modification"],
     },
 }
@@ -186,7 +186,7 @@ def _check_guardrails_cached(modification_type: str, confidence: float) -> tuple
         if modification_type in guardrail.get("blocks", []):
             violated.append(gid)
             continue
-        if gid == "G6_high_confidence_patterns" and confidence > 0.85:
+        if gid == "G6_high_confidence_patterns" and confidence >= 0.85:
             violated.append(gid)
             continue
         passed.append(gid)

@@ -281,7 +281,7 @@ def _parse_ts(ts: str) -> datetime:
 
 
 def _tier_from_confidence(confidence: float) -> str:
-    if confidence > 0.85:
+    if confidence >= 0.85:
         return "gold"
     elif confidence >= 0.70:
         return "production"

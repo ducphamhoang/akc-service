@@ -149,7 +149,7 @@ GUARDRAILS = {
         "violation_patterns": re.compile(r"collision_layer\s*=\s*\d+|collision_mask\s*=\s*\d+", re.I),
     },
     "G6_high_confidence_patterns": {
-        "description": "Never modify patterns with confidence > 0.85 without override_key",
+        "description": "Never modify patterns with confidence >= 0.85 without override_key",
     },
 }
 
@@ -221,7 +221,7 @@ def check_guardrails(
     g6_pass = True
     if pattern_entry:
         confidence = pattern_entry.get("confidence", 0.0)
-        if confidence > 0.85:
+        if confidence >= 0.85:
             if override_key:
                 # Validate override key format
                 if re.match(r"^OVERRIDE-[A-Z0-9]{8}$", override_key):
@@ -232,7 +232,7 @@ def check_guardrails(
             else:
                 g6_pass = False
                 violations.append(
-                    f"G6_high_confidence: Pattern '{pattern_entry.get('id')}' has confidence {confidence:.2f} > 0.85 — "
+                    f"G6_high_confidence: Pattern '{pattern_entry.get('id')}' has confidence {confidence:.2f} >= 0.85 — "
                     "requires override_key for modification"
                 )
     results["G6_high_confidence_patterns"] = "PASS" if g6_pass else "FAIL"
@@ -646,8 +646,8 @@ def set_escape_hatch(mode: str, reason: str = None) -> dict:
         "changed_by": "safety_engine",
     })
 
-    # Execute escape hatch side effects
-    side_effects = _execute_escape_hatch_effects(mode)
+    # Execute escape hatch side effects (pass old_hatch so reset can check prior quarantine state)
+    side_effects = _execute_escape_hatch_effects(mode, prior_escape_hatch=old_hatch)
 
     return {
         "escape_hatch": mode,
@@ -660,8 +660,15 @@ def set_escape_hatch(mode: str, reason: str = None) -> dict:
     }
 
 
-def _execute_escape_hatch_effects(mode: str) -> list:
-    """Execute side effects for escape hatch activation."""
+def _execute_escape_hatch_effects(mode: str, prior_escape_hatch: str = None) -> list:
+    """
+    Execute side effects for escape hatch activation.
+
+    Args:
+        mode: The new escape hatch mode being activated.
+        prior_escape_hatch: The escape hatch mode that was active before this call.
+                            Used to block reset when quarantine was previously active.
+    """
     effects = []
 
     if mode == "caution":
@@ -679,11 +686,34 @@ def _execute_escape_hatch_effects(mode: str) -> list:
         effects.append("Monitoring alerts elevated to 1-hour cadence")
 
     elif mode == "reset":
-        from akc_service.learning_integration import restore_from_checkpoint
+        # Guard: Do not restore if quarantine mode was active before this call.
+        # Use prior_escape_hatch (the state before the new mode was saved) so we
+        # check the operator-set quarantine, not the just-saved "reset" value.
+        if prior_escape_hatch == "quarantine":
+            effects.append("ERROR: Reset blocked — quarantine mode is active")
+            effects.append("Lift quarantine first (set escape hatch to 'none'), then retry reset")
+            return effects
+
+        from akc_service.learning_integration import restore_from_checkpoint, load_all_patterns
         success = restore_from_checkpoint()
         if success:
-            effects.append("KB patterns restored from checkpoint")
-            effects.append("Audit trail preserved in confidence_history.jsonl")
+            # Verify restore: confirm patterns can be loaded from restored file
+            try:
+                restored_patterns = load_all_patterns()
+                # Deduplicate to latest version per ID
+                seen: dict = {}
+                for p in restored_patterns:
+                    pid = p.get("id")
+                    if pid:
+                        seen[pid] = p
+                pattern_count = len(seen)
+                effects.append(f"KB patterns restored from checkpoint ({pattern_count} patterns loaded)")
+                effects.append("Audit trail preserved in confidence_history.jsonl")
+                effects.append(f"Verification passed: {pattern_count} unique patterns confirmed readable")
+            except Exception as e:
+                effects.append("KB patterns restored from checkpoint")
+                effects.append(f"WARNING: Post-restore verification failed: {e}")
+                effects.append("Audit trail preserved in confidence_history.jsonl")
         else:
             effects.append("ERROR: No checkpoint available — cannot restore")
             effects.append("Manual recovery required")

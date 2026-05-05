@@ -96,6 +96,32 @@ def update_fix(fix_id: str, updates: dict) -> bool:
     return found
 
 
+def load_all_patterns() -> list:
+    """Load all patterns from patterns.jsonl."""
+    patterns = []
+    if not PATTERNS_PATH.exists():
+        return patterns
+    with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    patterns.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return patterns
+
+
+def save_all_patterns(patterns: list) -> None:
+    """Atomically save all patterns to patterns.jsonl (overwrite)."""
+    PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for p in patterns:
+            f.write(json.dumps(p) + "\n")
+    tmp.replace(PATTERNS_PATH)
+
+
 def load_pattern(pattern_id: str) -> dict | None:
     if not PATTERNS_PATH.exists():
         return None
@@ -1087,11 +1113,25 @@ def rollback(fix_id: str, reason: str = None) -> dict:
     pattern_id = fix.get("pattern_id")
     rollback_reason = reason or "auto_rollback_deployment_failure"
 
-    # Log to confidence history
+    # Update pattern in KB if it exists
     if pattern_id:
-        pattern = load_pattern(pattern_id)
-        old_confidence = pattern.get("confidence", 0.5) if pattern else 0.5
+        patterns = load_all_patterns()
+        pattern = next((p for p in patterns if p.get("id") == pattern_id), None)
 
+        if pattern:
+            old_confidence = pattern.get("confidence", 0.5)
+
+            # Update pattern confidence to 0.0 (disabled)
+            pattern["confidence"] = 0.0
+            pattern["confidence_tier"] = "demoted"
+            pattern["updated_at"] = now_iso()
+
+            # Save updated patterns back to KB
+            save_all_patterns(patterns)
+        else:
+            old_confidence = 0.5
+
+        # Log to confidence history
         append_confidence_history({
             "history_id": f"ch-{now_iso()}-rollback",
             "pattern_id": pattern_id,

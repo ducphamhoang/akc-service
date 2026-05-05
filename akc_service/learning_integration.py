@@ -27,6 +27,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, Optional
 
 import os
 from akc_service.config import SAFETY_LEVEL, max_delta_for_level
@@ -38,6 +39,12 @@ PATTERNS_PATH = KB_DIR / "patterns.jsonl"
 CONFIDENCE_HISTORY_PATH = KB_DIR / "confidence_history.jsonl"
 CHECKPOINT_PATH = KB_DIR / "patterns.checkpoint"
 
+# ─── Pattern Index Cache ────────────────────────────────────────────────────────
+# Module-level in-memory index: {pattern_id: pattern_data}
+# Keyed by the mtime of patterns.jsonl so it auto-refreshes when the file changes.
+_pattern_index: Optional[Dict[str, dict]] = None
+_pattern_index_mtime: Optional[float] = None
+
 
 # ─── Helper Functions ───────────────────────────────────────────────────────────
 
@@ -47,8 +54,8 @@ def now_iso() -> str:
 
 
 def make_history_id() -> str:
-    """Generate a unique history ID from current timestamp."""
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+    """Generate a unique history ID from current timestamp with millisecond precision."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S.%f")[:-3]  # millisecond precision
     return f"ch-{ts}"
 
 
@@ -98,18 +105,151 @@ def find_pattern_by_id(pattern_id: str, patterns: list) -> dict | None:
     return result
 
 
+def build_pattern_index() -> Dict[str, dict]:
+    """
+    Build an in-memory deduplication index from patterns.jsonl.
+
+    Reads all lines in patterns.jsonl and keeps the LAST occurrence of each
+    pattern ID (most recent version wins — consistent with the append-only
+    versioning strategy used throughout the KB).
+
+    Acquires a shared (read) advisory lock before reading so that a concurrent
+    exclusive write lock held by append_pattern_version() causes this call to
+    fail fast (LOCK_NB) rather than block.  Retries up to 3 times with
+    exponential back-off (10 ms → 20 ms → 50 ms) before raising.
+
+    Performance target: < 100 ms for 10 000 patterns.
+
+    Returns:
+        dict mapping pattern_id -> pattern_data (most recent version only)
+
+    Raises:
+        BlockingIOError: if the file is still write-locked after all retries.
+    """
+    if not PATTERNS_PATH.exists():
+        return {}
+
+    _RETRY_DELAYS = (0.01, 0.02, 0.05)  # 10 ms, 20 ms, 50 ms
+
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        try:
+            with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                try:
+                    index: Dict[str, dict] = {}
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            pattern = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        pid = pattern.get("id")
+                        if pid:
+                            index[pid] = pattern  # last occurrence wins
+                    return index
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except BlockingIOError as exc:
+            last_exc = exc
+            if delay is not None:
+                time.sleep(delay)
+
+    raise BlockingIOError(
+        f"build_pattern_index: patterns.jsonl still write-locked after "
+        f"{len(_RETRY_DELAYS) + 1} attempts — writer may be stuck"
+    ) from last_exc
+
+
+def _get_pattern_index() -> Dict[str, dict]:
+    """
+    Return the cached pattern index, rebuilding it when patterns.jsonl has changed.
+
+    Uses file mtime as a cheap staleness check so we never return stale data
+    after a write, but avoid re-reading the file on every query.
+    """
+    global _pattern_index, _pattern_index_mtime
+
+    current_mtime: Optional[float] = None
+    if PATTERNS_PATH.exists():
+        current_mtime = PATTERNS_PATH.stat().st_mtime
+
+    if _pattern_index is None or current_mtime != _pattern_index_mtime:
+        _pattern_index = build_pattern_index()
+        _pattern_index_mtime = current_mtime
+
+    return _pattern_index
+
+
+def invalidate_pattern_index() -> None:
+    """
+    Force the next call to _get_pattern_index() to rebuild from disk.
+
+    Called immediately after any write to patterns.jsonl so that queries
+    issued in the same process see the freshly written data without waiting
+    for an mtime change (mtime granularity is 1 second on most filesystems).
+    """
+    global _pattern_index, _pattern_index_mtime
+    _pattern_index = None
+    _pattern_index_mtime = None
+
+
+def get_deduped_patterns() -> list:
+    """
+    Return all active patterns, deduplicated to the most recent version per ID,
+    sorted deterministically by pattern ID.
+
+    This is the authoritative read path for any code that needs a stable,
+    consistent view of the KB.  Replaces raw load_all_patterns() calls where
+    determinism matters (e.g. /query endpoint).
+
+    Returns:
+        List of pattern dicts sorted by "id" ascending.
+    """
+    index = _get_pattern_index()
+    return sorted(index.values(), key=lambda p: p.get("id", ""))
+
+
+def normalize_pattern_tier(pattern: dict) -> dict:
+    """
+    Normalize a pattern's confidence_tier field to be consistent with its confidence score.
+
+    Uses the canonical _confidence_tier() boundaries (>= 0.85 gold, >= 0.70 production,
+    >= 0.50 experimental, else demoted) so that stored tier always matches confidence.
+
+    This is idempotent: calling it twice on the same pattern yields the same result.
+
+    Args:
+        pattern: Pattern dict with at least a "confidence" key.
+
+    Returns:
+        The same dict with confidence_tier updated in-place (and returned for chaining).
+    """
+    confidence = pattern.get("confidence", 0.0)
+    pattern["confidence_tier"] = _confidence_tier(confidence)
+    return pattern
+
+
 def append_pattern_version(pattern: dict) -> None:
     """
     Append a new pattern version to patterns.jsonl (immutable append-only, Phase 4).
 
     Updates the confidence, confidence_tier, updated_at, and version fields
     of the pattern before appending. Uses advisory file lock to prevent concurrent append corruption.
+
+    Normalizes confidence_tier before writing to ensure stored tier always matches
+    the confidence value using canonical boundary rules (>= 0.85 gold, etc.).
     """
     # Guard: Quarantine mode blocks KB writes
     from akc_service.safety_engine import load_safety_state
     safety_state = load_safety_state()
     if safety_state.get("escape_hatch") == "quarantine":
         raise RuntimeError("KB writes blocked: quarantine mode active")
+
+    # Normalize tier before persisting so stored data is always self-consistent
+    normalize_pattern_tier(pattern)
 
     PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(PATTERNS_PATH, "a", encoding="utf-8") as f:
@@ -118,6 +258,9 @@ def append_pattern_version(pattern: dict) -> None:
             f.write(json.dumps(pattern) + "\n")
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+    # Invalidate the in-memory index so the next query sees the new version
+    invalidate_pattern_index()
 
     # Queue for remote sync if enabled and confidence meets threshold
     try:
@@ -157,20 +300,54 @@ def log_confidence_update(entry: dict) -> None:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def load_all_patterns() -> list:
-    """Load all patterns from patterns.jsonl."""
+def _read_patterns_jsonl(f) -> list:
+    """Read all valid JSON lines from an open file object. Caller owns the lock."""
     patterns = []
-    if not PATTERNS_PATH.exists():
-        return patterns
-    with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    patterns.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                patterns.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
     return patterns
+
+
+def load_all_patterns() -> list:
+    """
+    Load all patterns from patterns.jsonl.
+
+    Acquires a shared (read) advisory lock before reading so that a concurrent
+    exclusive write lock held by append_pattern_version() causes this call to
+    fail fast (LOCK_NB) rather than block.  Retries up to 3 times with
+    exponential back-off (10 ms → 20 ms → 50 ms) before raising.
+
+    Raises:
+        BlockingIOError: if the file is still write-locked after all retries.
+    """
+    if not PATTERNS_PATH.exists():
+        return []
+
+    _RETRY_DELAYS = (0.01, 0.02, 0.05)  # 10 ms, 20 ms, 50 ms
+
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        try:
+            with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                try:
+                    return _read_patterns_jsonl(f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except BlockingIOError as exc:
+            last_exc = exc
+            if delay is not None:
+                time.sleep(delay)
+
+    raise BlockingIOError(
+        f"load_all_patterns: patterns.jsonl still write-locked after "
+        f"{len(_RETRY_DELAYS) + 1} attempts — writer may be stuck"
+    ) from last_exc
 
 
 def save_all_patterns(patterns: list) -> None:
@@ -187,6 +364,9 @@ def save_all_patterns(patterns: list) -> None:
         for p in patterns:
             f.write(json.dumps(p) + "\n")
     tmp.replace(PATTERNS_PATH)
+
+    # Invalidate the in-memory index so subsequent reads reflect the rewrite
+    invalidate_pattern_index()
 
 
 def append_confidence_history(entry: dict) -> None:
@@ -257,6 +437,8 @@ def restore_from_checkpoint() -> bool:
         tmp.write_text(checkpoint_content, encoding="utf-8")
         # Atomically replace patterns.jsonl with temp file
         tmp.replace(PATTERNS_PATH)
+        # Invalidate the in-memory index so queries see the restored KB
+        invalidate_pattern_index()
         return True
     except (IOError, OSError):
         return False  # Restoration failed
@@ -744,73 +926,127 @@ def apply_confidence_delta(task_result: dict) -> dict:
 
 # ─── Latency Monitoring ─────────────────────────────────────────────────────────
 
-def check_latency() -> dict:
+def _load_history_entries(cutoff_time: Optional[datetime] = None) -> list:
+    """
+    Load confidence history entries from confidence_history.jsonl.
+
+    Args:
+        cutoff_time: If provided (timezone-aware UTC datetime), only entries
+                     with timestamp >= cutoff_time are returned. If None, all
+                     entries are returned.
+
+    Returns:
+        List of parsed history entry dicts that pass the time filter.
+    """
+    if not CONFIDENCE_HISTORY_PATH.exists():
+        return []
+
+    entries = []
+    with open(CONFIDENCE_HISTORY_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if cutoff_time is not None:
+                ts_raw = entry.get("timestamp", "")
+                try:
+                    # Parse ISO 8601 — handle both "Z" suffix and "+00:00" offset
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if ts < cutoff_time:
+                        continue  # Skip entries before the cutoff
+                except (ValueError, AttributeError):
+                    continue  # Skip entries with unparseable timestamps
+
+            entries.append(entry)
+    return entries
+
+
+def count_history_patterns_in_window(cutoff_time: Optional[datetime] = None) -> dict:
+    """
+    Count unique patterns and update events in confidence_history.jsonl
+    within the given time window.
+
+    Args:
+        cutoff_time: If provided (timezone-aware UTC datetime), only entries
+                     at or after this time are counted. If None, all entries
+                     are counted.
+
+    Returns:
+        dict with:
+            "patterns_updated": int  — unique pattern IDs touched in the window
+            "total_updates":    int  — total update events in the window
+    """
+    entries = _load_history_entries(cutoff_time=cutoff_time)
+    unique_ids: set = set()
+    for entry in entries:
+        pid = entry.get("pattern_id")
+        if pid:
+            unique_ids.add(pid)
+    return {
+        "patterns_updated": len(unique_ids),
+        "total_updates": len(entries),
+    }
+
+
+def check_latency(cutoff_time: Optional[datetime] = None) -> dict:
     """
     Check learning latency compliance (<5 minutes SLA).
+
+    Args:
+        cutoff_time: If provided (timezone-aware UTC datetime), only history
+                     entries at or after this time are included in the stats.
+                     If None, all entries are used (all-time behaviour).
 
     Returns:
         dict with latency statistics and SLA status
     """
+    _empty = {
+        "measurement_time": now_iso(),
+        "sample_count": 0,
+        "latency_stats": {
+            "min_ms": 0,
+            "max_ms": 0,
+            "avg_ms": 0,
+            "p95_ms": 0,
+            "over_sla_count": 0
+        },
+        "sla_status": "UNKNOWN"
+    }
+
     if not CONFIDENCE_HISTORY_PATH.exists():
-        return {
-            "measurement_time": now_iso(),
-            "sample_count": 0,
-            "latency_stats": {
-                "min_ms": 0,
-                "max_ms": 0,
-                "avg_ms": 0,
-                "p95_ms": 0,
-                "over_sla_count": 0
-            },
-            "sla_status": "UNKNOWN"
-        }
+        return _empty
 
-    # Read confidence history
-    entries = []
-    with open(CONFIDENCE_HISTORY_PATH, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                try:
-                    entry = json.loads(line)
-                    latency = entry.get("latency_ms", 0)
-                    entries.append(latency)
-                except json.JSONDecodeError:
-                    pass
+    all_entries = _load_history_entries(cutoff_time=cutoff_time)
+    latencies = [e.get("latency_ms", 0) for e in all_entries]
 
-    if not entries:
-        return {
-            "measurement_time": now_iso(),
-            "sample_count": 0,
-            "latency_stats": {
-                "min_ms": 0,
-                "max_ms": 0,
-                "avg_ms": 0,
-                "p95_ms": 0,
-                "over_sla_count": 0
-            },
-            "sla_status": "UNKNOWN"
-        }
+    if not latencies:
+        return _empty
 
     # Calculate statistics
-    entries_sorted = sorted(entries)
-    min_ms = min(entries)
-    max_ms = max(entries)
-    avg_ms = int(sum(entries) / len(entries))
+    latencies_sorted = sorted(latencies)
+    min_ms = min(latencies)
+    max_ms = max(latencies)
+    avg_ms = int(sum(latencies) / len(latencies))
 
     # Calculate p95
-    p95_index = int(len(entries_sorted) * 0.95)
-    p95_ms = entries_sorted[p95_index] if p95_index < len(entries_sorted) else max_ms
+    p95_index = int(len(latencies_sorted) * 0.95)
+    p95_ms = latencies_sorted[p95_index] if p95_index < len(latencies_sorted) else max_ms
 
     # Count over SLA (50 ms per documented SLA budget)
     sla_threshold_ms = 50
-    over_sla_count = sum(1 for e in entries if e > sla_threshold_ms)
+    over_sla_count = sum(1 for e in latencies if e > sla_threshold_ms)
 
     # Determine SLA status
     sla_status = "HEALTHY" if over_sla_count == 0 else "WARNING"
 
     return {
         "measurement_time": now_iso(),
-        "sample_count": len(entries),
+        "sample_count": len(latencies),
         "latency_stats": {
             "min_ms": min_ms,
             "max_ms": max_ms,

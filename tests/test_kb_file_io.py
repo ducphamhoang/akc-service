@@ -545,3 +545,398 @@ class TestIntegration:
 
         assert len(patterns) == 1
         assert len(history_lines) == 1
+
+
+# ─── Test 8: Pattern Index & Determinism (Tech-M7) ────────────────────────
+
+
+class TestPatternIndexDeterminism:
+    """
+    Tests for build_pattern_index(), get_deduped_patterns(), and
+    invalidate_pattern_index() — the fix for TIER 2 issue 10.
+
+    Verifies that get_deduped_patterns() and get_active_patterns() always
+    return the same result regardless of how many times they are called,
+    even when the same pattern ID has been written multiple times
+    (append-only versioning means duplicates accumulate over time).
+    """
+
+    @pytest.fixture(autouse=True)
+    def no_quarantine(self):
+        """Ensure the safety engine never blocks writes during these tests."""
+        with patch(
+            "akc_service.safety_engine.load_safety_state",
+            return_value={"escape_hatch": "none"}
+        ):
+            yield
+
+    def _reset_index(self):
+        """Force index rebuild so tests start with a clean slate."""
+        learning_integration.invalidate_pattern_index()
+
+    def test_build_pattern_index_deduplicates_last_occurrence_wins(self, tmp_kb_paths: Path):
+        """build_pattern_index keeps the LAST entry for each ID."""
+        self._reset_index()
+
+        p_v1 = _make_pattern("dup-001", confidence=0.60)
+        p_v2 = _make_pattern("dup-001", confidence=0.80)
+        p_v3 = _make_pattern("dup-001", confidence=0.75)
+
+        for p in (p_v1, p_v2, p_v3):
+            learning_integration.append_pattern_version(p)
+
+        index = learning_integration.build_pattern_index()
+
+        assert len(index) == 1, f"Expected 1 unique ID, got {len(index)}"
+        assert "dup-001" in index
+        # Last written version (v3, confidence=0.75) must win
+        assert index["dup-001"]["confidence"] == 0.75, (
+            f"Expected 0.75 (last-occurrence-wins), got {index['dup-001']['confidence']}"
+        )
+
+    def test_build_pattern_index_multiple_ids(self, tmp_kb_paths: Path):
+        """build_pattern_index returns one entry per unique ID."""
+        self._reset_index()
+
+        learning_integration.append_pattern_version(_make_pattern("a-001", confidence=0.70))
+        learning_integration.append_pattern_version(_make_pattern("b-002", confidence=0.80))
+        learning_integration.append_pattern_version(_make_pattern("a-001", confidence=0.85))  # v2
+        learning_integration.append_pattern_version(_make_pattern("c-003", confidence=0.60))
+
+        index = learning_integration.build_pattern_index()
+
+        assert set(index.keys()) == {"a-001", "b-002", "c-003"}
+        assert index["a-001"]["confidence"] == 0.85, "a-001 should use its v2 confidence"
+
+    def test_get_deduped_patterns_sorted_by_id(self, tmp_kb_paths: Path):
+        """get_deduped_patterns returns patterns sorted alphabetically by ID."""
+        self._reset_index()
+
+        learning_integration.append_pattern_version(_make_pattern("z-last", confidence=0.70))
+        learning_integration.append_pattern_version(_make_pattern("a-first", confidence=0.80))
+        learning_integration.append_pattern_version(_make_pattern("m-middle", confidence=0.75))
+
+        patterns = learning_integration.get_deduped_patterns()
+        ids = [p["id"] for p in patterns]
+
+        assert ids == sorted(ids), f"Expected sorted IDs, got {ids}"
+        assert ids == ["a-first", "m-middle", "z-last"]
+
+    def test_get_deduped_patterns_deterministic_across_5_calls(self, tmp_kb_paths: Path):
+        """
+        Core determinism test: same query returns identical list on all 5 calls.
+
+        Simulates the scenario described in TIER 2 issue 10 — a pattern ID that
+        appears multiple times in patterns.jsonl due to append-only versioning.
+        """
+        self._reset_index()
+
+        # Write pattern "det-001" five times (5 versions accumulate)
+        for i in range(1, 6):
+            p = _make_pattern("det-001", confidence=0.50 + i * 0.05)
+            learning_integration.append_pattern_version(p)
+
+        # Also write two other patterns
+        learning_integration.append_pattern_version(_make_pattern("det-002", confidence=0.72))
+        learning_integration.append_pattern_version(_make_pattern("det-003", confidence=0.88))
+
+        # Call get_deduped_patterns 5 times and collect results
+        results = [learning_integration.get_deduped_patterns() for _ in range(5)]
+
+        # All 5 results must be identical
+        assert all(r == results[0] for r in results), (
+            "get_deduped_patterns() returned different results across calls — not deterministic"
+        )
+
+        # Only 3 unique patterns (not 7)
+        assert len(results[0]) == 3, f"Expected 3 deduplicated patterns, got {len(results[0])}"
+
+        # det-001 must carry the LAST confidence (v5 = 0.50 + 5*0.05 = 0.75)
+        det001 = next(p for p in results[0] if p["id"] == "det-001")
+        assert det001["confidence"] == 0.75, (
+            f"Expected last version confidence 0.75, got {det001['confidence']}"
+        )
+
+    def test_invalidate_pattern_index_forces_rebuild(self, tmp_kb_paths: Path):
+        """After invalidation, the next call rebuilds from disk and sees new data."""
+        self._reset_index()
+
+        learning_integration.append_pattern_version(_make_pattern("inv-001", confidence=0.60))
+
+        # Warm the cache
+        _ = learning_integration.get_deduped_patterns()
+
+        # Manually write a second version directly (bypassing append_pattern_version
+        # to avoid auto-invalidation — tests the staleness-check path)
+        import json as _json
+        new_version = _make_pattern("inv-001", confidence=0.90)
+        with open(learning_integration.PATTERNS_PATH, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(new_version) + "\n")
+
+        # Without invalidation, index may be stale (mtime check covers this, but
+        # explicit invalidation guarantees a rebuild)
+        learning_integration.invalidate_pattern_index()
+
+        patterns = learning_integration.get_deduped_patterns()
+        inv001 = next(p for p in patterns if p["id"] == "inv-001")
+        assert inv001["confidence"] == 0.90, (
+            f"After invalidation, expected refreshed confidence 0.90, got {inv001['confidence']}"
+        )
+
+    def test_append_pattern_version_invalidates_cache(self, tmp_kb_paths: Path):
+        """append_pattern_version automatically invalidates the index cache."""
+        self._reset_index()
+
+        learning_integration.append_pattern_version(_make_pattern("auto-001", confidence=0.60))
+
+        # Warm cache
+        patterns_before = learning_integration.get_deduped_patterns()
+        assert any(p["id"] == "auto-001" and p["confidence"] == 0.60 for p in patterns_before)
+
+        # Write a new version — must auto-invalidate
+        learning_integration.append_pattern_version(_make_pattern("auto-001", confidence=0.90))
+
+        patterns_after = learning_integration.get_deduped_patterns()
+        auto001 = next(p for p in patterns_after if p["id"] == "auto-001")
+        assert auto001["confidence"] == 0.90, (
+            f"Cache should be invalidated after append; expected 0.90, got {auto001['confidence']}"
+        )
+
+    def test_get_active_patterns_deterministic_with_duplicates(self, tmp_kb_paths: Path):
+        """
+        get_active_patterns() returns identical ordered list across 5 calls,
+        even with 5 versions of the same pattern ID in patterns.jsonl.
+        """
+        from akc_service.api.routes import get_active_patterns
+
+        self._reset_index()
+
+        # Add the same entity/component pattern 5 times with varying confidence
+        for i in range(1, 6):
+            p = _make_pattern("route-001", confidence=0.50 + i * 0.05)
+            p["entity"] = "player"
+            p["component"] = "HealthComponent"
+            learning_integration.append_pattern_version(p)
+
+        # Add a second pattern for the same entity/component
+        p2 = _make_pattern("route-002", confidence=0.90)
+        p2["entity"] = "player"
+        p2["component"] = "HealthComponent"
+        learning_integration.append_pattern_version(p2)
+
+        # Call 5 times
+        results = [get_active_patterns("player", "HealthComponent") for _ in range(5)]
+
+        assert all(r == results[0] for r in results), (
+            "get_active_patterns() is non-deterministic across repeated calls"
+        )
+
+        # Exactly 2 patterns (one per unique ID, demoted ones excluded)
+        assert len(results[0]) == 2, f"Expected 2 patterns, got {len(results[0])}"
+
+        # Sorted by confidence descending; ties broken by ID ascending
+        confidences = [p["confidence"] for p in results[0]]
+        assert confidences == sorted(confidences, reverse=True), (
+            "Results must be sorted by confidence descending"
+        )
+
+        # route-001 last version: 0.50 + 5*0.05 = 0.75
+        # route-002: 0.90
+        # Expected order: route-002 first, route-001 second
+        assert results[0][0]["id"] == "route-002"
+        assert results[0][1]["id"] == "route-001"
+
+    def test_get_deduped_patterns_empty_kb(self, tmp_kb_paths: Path):
+        """get_deduped_patterns returns [] when patterns.jsonl is missing."""
+        self._reset_index()
+        # tmp_kb_paths has no patterns.jsonl yet
+        patterns = learning_integration.get_deduped_patterns()
+        assert patterns == [], f"Expected [] for empty KB, got {patterns}"
+
+    def test_build_pattern_index_skips_malformed_lines(self, tmp_kb_paths: Path):
+        """build_pattern_index skips lines that are not valid JSON."""
+        self._reset_index()
+
+        learning_integration.PATTERNS_PATH.write_text(
+            '{"id": "ok-001", "confidence": 0.80}\n'
+            'this is not json\n'
+            '{"id": "ok-002", "confidence": 0.70}\n',
+            encoding="utf-8"
+        )
+
+        index = learning_integration.build_pattern_index()
+        assert set(index.keys()) == {"ok-001", "ok-002"}, (
+            f"Should contain ok-001 and ok-002, got {set(index.keys())}"
+        )
+
+
+# ─── Test 9: Advisory Read Lock (TIER 3 Data-M6) ──────────────────────────
+
+
+class TestAdvisoryReadLock:
+    """
+    Tests for the LOCK_SH | LOCK_NB advisory lock added to load_all_patterns()
+    and build_pattern_index() (TIER 3, Data-M6).
+
+    Coverage:
+    1. Normal read succeeds with no contention.
+    2. While file is exclusively write-locked, load_all_patterns raises BlockingIOError.
+    3. While file is exclusively write-locked, build_pattern_index raises BlockingIOError.
+    4. Multiple concurrent readers acquire shared locks without blocking each other.
+    5. After the write lock is released, a subsequent read succeeds.
+    """
+
+    @pytest.fixture(autouse=True)
+    def no_quarantine(self):
+        """Ensure the safety engine never blocks writes during these tests."""
+        with patch(
+            "akc_service.safety_engine.load_safety_state",
+            return_value={"escape_hatch": "none"}
+        ):
+            yield
+
+    def test_read_succeeds_when_no_contention(self, tmp_kb_paths: Path):
+        """load_all_patterns and build_pattern_index work normally with no lock held."""
+        p1 = _make_pattern("lock-001", confidence=0.75)
+        learning_integration.append_pattern_version(p1)
+
+        patterns = learning_integration.load_all_patterns()
+        assert len(patterns) == 1
+        assert patterns[0]["id"] == "lock-001"
+
+        index = learning_integration.build_pattern_index()
+        assert "lock-001" in index
+
+    def test_load_all_patterns_raises_when_write_locked(self, tmp_kb_paths: Path):
+        """
+        load_all_patterns raises BlockingIOError when patterns.jsonl is write-locked.
+
+        Simulates a writer holding LOCK_EX by acquiring it in the main thread,
+        then verifying that load_all_patterns() exhausts its retries and raises.
+        """
+        import fcntl as _fcntl
+
+        # Seed the file so it exists
+        p = _make_pattern("lock-read-001", confidence=0.70)
+        learning_integration.append_pattern_version(p)
+
+        # Hold an exclusive write lock from another thread
+        lock_acquired = threading.Event()
+        release_lock = threading.Event()
+
+        def hold_write_lock():
+            with open(learning_integration.PATTERNS_PATH, "a", encoding="utf-8") as lf:
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
+                lock_acquired.set()
+                # Hold the lock until the main thread signals release
+                release_lock.wait(timeout=5.0)
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
+
+        writer = threading.Thread(target=hold_write_lock, daemon=True)
+        writer.start()
+        lock_acquired.wait(timeout=2.0)
+
+        try:
+            with pytest.raises(BlockingIOError, match="write-locked"):
+                learning_integration.load_all_patterns()
+        finally:
+            release_lock.set()
+            writer.join(timeout=2.0)
+
+    def test_build_pattern_index_raises_when_write_locked(self, tmp_kb_paths: Path):
+        """
+        build_pattern_index raises BlockingIOError when patterns.jsonl is write-locked.
+        """
+        import fcntl as _fcntl
+
+        p = _make_pattern("lock-index-001", confidence=0.80)
+        learning_integration.append_pattern_version(p)
+
+        lock_acquired = threading.Event()
+        release_lock = threading.Event()
+
+        def hold_write_lock():
+            with open(learning_integration.PATTERNS_PATH, "a", encoding="utf-8") as lf:
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
+                lock_acquired.set()
+                release_lock.wait(timeout=5.0)
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
+
+        writer = threading.Thread(target=hold_write_lock, daemon=True)
+        writer.start()
+        lock_acquired.wait(timeout=2.0)
+
+        try:
+            with pytest.raises(BlockingIOError, match="write-locked"):
+                learning_integration.build_pattern_index()
+        finally:
+            release_lock.set()
+            writer.join(timeout=2.0)
+
+    def test_concurrent_readers_do_not_block_each_other(self, tmp_kb_paths: Path):
+        """
+        Multiple threads reading concurrently all succeed — shared locks are compatible.
+        """
+        # Seed with some patterns
+        for i in range(5):
+            learning_integration.append_pattern_version(
+                _make_pattern(f"cr-{i:03d}", confidence=0.50 + i * 0.05)
+            )
+
+        results: list[list] = []
+        errors: list[Exception] = []
+
+        def reader():
+            try:
+                patterns = learning_integration.load_all_patterns()
+                results.append(patterns)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=reader) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert not errors, f"Concurrent readers raised: {errors}"
+        assert len(results) == 8, f"Expected 8 successful reads, got {len(results)}"
+        assert all(len(r) == 5 for r in results), "Each reader should see all 5 patterns"
+
+    def test_read_succeeds_after_write_lock_released(self, tmp_kb_paths: Path):
+        """
+        After a write lock is released, load_all_patterns returns the file contents.
+        """
+        import fcntl as _fcntl
+
+        # Pre-seed file
+        learning_integration.append_pattern_version(
+            _make_pattern("post-lock-001", confidence=0.72)
+        )
+
+        lock_acquired = threading.Event()
+        release_lock = threading.Event()
+
+        def hold_write_lock():
+            with open(learning_integration.PATTERNS_PATH, "a", encoding="utf-8") as lf:
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
+                lock_acquired.set()
+                release_lock.wait(timeout=5.0)
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
+
+        writer = threading.Thread(target=hold_write_lock, daemon=True)
+        writer.start()
+        lock_acquired.wait(timeout=2.0)
+
+        # While locked, reads should fail
+        with pytest.raises(BlockingIOError):
+            learning_integration.load_all_patterns()
+
+        # Release the lock
+        release_lock.set()
+        writer.join(timeout=2.0)
+
+        # After release, reads must succeed
+        patterns = learning_integration.load_all_patterns()
+        assert len(patterns) == 1
+        assert patterns[0]["id"] == "post-lock-001"

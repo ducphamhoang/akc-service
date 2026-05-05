@@ -13,8 +13,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
 
 # Package-relative imports — no sys.path manipulation needed
 import os
@@ -25,13 +25,18 @@ KB_DIR = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
 
 from akc_service.learning_integration import (
     load_all_patterns,
+    get_deduped_patterns,
     find_pattern_by_id,
     append_pattern_version,
     log_confidence_update,
     check_latency,
+    count_history_patterns_in_window,
     now_iso,
     determine_tier,
     apply_confidence_delta,
+    save_checkpoint,
+    restore_from_checkpoint,
+    CHECKPOINT_PATH,
 )
 
 
@@ -40,7 +45,12 @@ def get_active_patterns(entity: str, component: str) -> list:
     Query patterns for entity:component.
 
     Replaces the former orchestrator_hooks.get_active_patterns() to avoid
-    circular dependency. Uses load_all_patterns() from learning_integration.
+    circular dependency. Uses get_deduped_patterns() from learning_integration
+    for deterministic, deduplicated results.
+
+    Deduplication: last-occurrence-wins per pattern ID (most recent version).
+    Ordering: primary sort by confidence descending; ties broken by pattern ID
+    ascending so the result is identical across repeated calls.
 
     Returns list of dicts with pattern id, confidence, and tier.
     """
@@ -48,7 +58,9 @@ def get_active_patterns(entity: str, component: str) -> list:
         logger.warning(f"get_active_patterns: missing entity or component ({entity}, {component})")
         return []
 
-    patterns = load_all_patterns()
+    # get_deduped_patterns() returns one entry per ID (last-occurrence-wins)
+    # sorted by ID ascending — gives us a stable base to sort on.
+    patterns = get_deduped_patterns()
     if not patterns:
         logger.warning("get_active_patterns: no patterns loaded from KB")
         return []
@@ -63,7 +75,9 @@ def get_active_patterns(entity: str, component: str) -> list:
                     "confidence": p.get("confidence", 0.5),
                     "tier": tier,
                 })
-    matched.sort(key=lambda x: x["confidence"], reverse=True)
+
+    # Sort by confidence descending; break ties deterministically by ID ascending
+    matched.sort(key=lambda x: (-x["confidence"], x["id"]))
     return matched
 
 logger = logging.getLogger(__name__)
@@ -94,7 +108,6 @@ class RecordResponse(BaseModel):
 
 class FixRequest(BaseModel):
     """Request model for pattern fix retrieval."""
-    signature_hash: str = Field(..., description="Pattern signature hash")
     category: str = Field(..., description="Fix category: detection|implementation|testing|documentation|other")
 
 
@@ -115,11 +128,19 @@ class StatsRequest(BaseModel):
 
 class StatsResponse(BaseModel):
     """Response model for KB statistics."""
-    sample_count: int = Field(..., description="Number of latency samples")
+    sample_count: int = Field(..., description="Number of latency samples in the time window")
     latency_stats: Dict[str, Any] = Field(..., description="Min/max/avg/p95 latency in ms")
     sla_status: str = Field(..., description="'HEALTHY' or 'WARNING'")
     gold_tier_count: int = Field(..., description="Number of gold-tier patterns")
     avg_confidence: float = Field(..., description="Average confidence across KB")
+    patterns_updated: int = Field(
+        default=0,
+        description="Number of unique patterns updated in the time window"
+    )
+    time_window: str = Field(
+        default="all",
+        description="Time window applied to these stats"
+    )
 
 
 class UpdateRequest(BaseModel):
@@ -140,6 +161,17 @@ class UpdateResponse(BaseModel):
 class QueryRequest(BaseModel):
     """Request model for pattern query."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "task_id": "task-001",
+                "entity": "player",
+                "component": "HealthComponent",
+                "context": {"difficulty": "hard"}
+            }
+        }
+    )
+
     task_id: str = Field(..., description="Unique task identifier")
     entity: str = Field(..., description="Entity name (e.g., 'player', 'enemy_knight')")
     component: str = Field(..., description="Component name (e.g., 'HealthComponent')")
@@ -148,43 +180,30 @@ class QueryRequest(BaseModel):
         description="Additional context for the query (optional)"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "task_id": "task-001",
-                "entity": "player",
-                "component": "HealthComponent",
-                "context": {"difficulty": "hard"}
-            }
-        }
-
 
 class PatternResponse(BaseModel):
     """Pattern metadata in response."""
 
-    id: str = Field(..., description="Pattern unique identifier")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
-    tier: str = Field(..., description="Confidence tier (gold, production, experimental, demoted)")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "id": "pattern_001",
                 "confidence": 0.85,
                 "tier": "gold"
             }
         }
+    )
+
+    id: str = Field(..., description="Pattern unique identifier")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
+    tier: str = Field(..., description="Confidence tier (gold, production, experimental, demoted)")
 
 
 class QueryResponse(BaseModel):
     """Response model for pattern query."""
 
-    patterns: List[PatternResponse] = Field(..., description="List of matching patterns")
-    query_latency_ms: float = Field(..., description="Query execution time in milliseconds")
-    source: str = Field(default="kb", description="Source of patterns (kb, cache, etc.)")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "patterns": [
                     {
@@ -202,6 +221,11 @@ class QueryResponse(BaseModel):
                 "source": "kb"
             }
         }
+    )
+
+    patterns: List[PatternResponse] = Field(..., description="List of matching patterns")
+    query_latency_ms: float = Field(..., description="Query execution time in milliseconds")
+    source: str = Field(default="kb", description="Source of patterns (kb, cache, etc.)")
 
 
 # ─── APIRouter ─────────────────────────────────────────────────────────────
@@ -297,20 +321,20 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
 
 # ─── Task Outcome Recording Endpoint ───────────────────────────────────────
 
-@router.post("/record", status_code=status.HTTP_202_ACCEPTED)
-async def record_task_outcome(request: RecordRequest, background_tasks: BackgroundTasks) -> RecordResponse:
+@router.post("/record", status_code=status.HTTP_200_OK)
+async def record_task_outcome(request: RecordRequest) -> RecordResponse:
     """
     Record a task outcome and apply confidence delta updates synchronously.
 
     Validates schema_version == "1.0", then immediately applies confidence deltas
-    to active patterns. Ensures durability: confidence updates reach KB before
-    202 response is returned to client.
+    to active patterns. KB write completes before response is returned — no
+    fire-and-forget, no lost updates on process restart.
 
     Args:
         request: RecordRequest with task_id, status, timestamp, and akc_context.
 
     Returns:
-        RecordResponse 202 Accepted (update is synchronous and durable).
+        RecordResponse 200 OK when KB write has completed and been durably persisted.
 
     Raises:
         HTTPException 400: If schema_version != "1.0" or status invalid.
@@ -400,18 +424,17 @@ async def record_task_outcome(request: RecordRequest, background_tasks: Backgrou
 @router.post("/fix")
 async def get_pattern_fixes(request: FixRequest) -> FixResponse:
     """
-    Retrieve fix recommendations for a pattern by signature hash and category.
+    Retrieve fix recommendations for a pattern by category.
 
     Loads all patterns from KB, filters by category, and returns matching fixes.
 
     Args:
-        request: FixRequest with signature_hash and category (enum of 5 categories).
+        request: FixRequest with category (enum of 5 categories).
 
     Returns:
         FixResponse with list of fixes matching the category.
 
     Raises:
-        HTTPException 404: If no patterns match the category.
         HTTPException 400: If category is invalid.
         HTTPException 500: If pattern loading fails.
     """
@@ -419,8 +442,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
         valid_categories = {"detection", "implementation", "testing", "documentation", "other"}
         if request.category not in valid_categories:
             logger.warning(
-                f"get_pattern_fixes: invalid category={request.category}, "
-                f"hash={request.signature_hash}"
+                f"get_pattern_fixes: invalid category={request.category}"
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -428,7 +450,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
             )
 
         logger.info(
-            f"get_pattern_fixes: hash={request.signature_hash}, category={request.category}"
+            f"get_pattern_fixes: category={request.category}"
         )
 
         # Load all patterns
@@ -470,7 +492,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
         raise
     except Exception as e:
         logger.error(
-            f"get_pattern_fixes: hash={request.signature_hash} failed - {e}",
+            f"get_pattern_fixes: category={request.category} failed - {e}",
             exc_info=True
         )
         raise HTTPException(
@@ -481,37 +503,86 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
 
 # ─── KB Statistics Endpoint ────────────────────────────────────────────────
 
+_VALID_TIME_WINDOWS = {"all", "1h", "24h", "7d", "30d"}
+
+_WINDOW_DELTAS = {
+    "1h":  {"hours": 1},
+    "24h": {"hours": 24},
+    "7d":  {"days": 7},
+    "30d": {"days": 30},
+}
+
+
+def _parse_time_window(window_str: str) -> Optional[datetime]:
+    """
+    Convert a time_window string to a UTC cutoff datetime.
+
+    Supported values: "1h", "24h", "7d", "30d".
+    Returns None for "all" (no cutoff) or unrecognised values.
+
+    Args:
+        window_str: One of "all", "1h", "24h", "7d", "30d".
+
+    Returns:
+        timezone-aware UTC datetime marking the start of the window, or None.
+    """
+    from datetime import timedelta
+    delta_kwargs = _WINDOW_DELTAS.get(window_str)
+    if delta_kwargs is None:
+        return None  # "all" or unknown → no cutoff
+    return datetime.now(timezone.utc) - timedelta(**delta_kwargs)
+
+
 @router.get("/stats")
 async def get_kb_stats(time_window: str = "all") -> StatsResponse:
     """
     Retrieve KB statistics: latency compliance, gold-tier count, average confidence.
 
     Calls check_latency() from learning_integration and loads patterns for tier analysis.
+    When time_window is specified, latency samples and pattern-update counts are
+    filtered to only include records whose timestamp falls within the window.
 
     Args:
-        time_window: Optional query param "all", "24h", "7d", or "30d" (not yet filtered).
+        time_window: Optional query param — "all" (default), "1h", "24h", "7d", or "30d".
+                     Invalid values are rejected with HTTP 400.
 
     Returns:
-        StatsResponse with latency stats, SLA status, and tier metrics.
+        StatsResponse with latency stats, SLA status, tier metrics, and window metadata.
 
     Raises:
+        HTTPException 400: If time_window value is not one of the accepted options.
         HTTPException 500: If stats collection fails.
     """
     try:
-        valid_windows = {"all", "24h", "7d", "30d"}
-        if time_window not in valid_windows:
-            logger.warning(f"get_kb_stats: invalid time_window={time_window}")
-            # Silently default to "all" rather than fail
-            time_window = "all"
+        if time_window not in _VALID_TIME_WINDOWS:
+            logger.warning(f"get_kb_stats: invalid time_window={time_window!r}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Invalid time_window {time_window!r}. "
+                    f"Must be one of: {sorted(_VALID_TIME_WINDOWS)}"
+                )
+            )
 
-        logger.info(f"get_kb_stats: time_window={time_window}")
+        # Resolve the window to a UTC cutoff (None means "all time")
+        cutoff = _parse_time_window(time_window)
 
-        # Get latency stats from learning_integration
-        latency_data = check_latency()
+        logger.info(
+            f"get_kb_stats: time_window={time_window}, "
+            f"cutoff={cutoff.isoformat() if cutoff else 'none'}"
+        )
+
+        # Get latency stats filtered by the time window
+        latency_data = check_latency(cutoff_time=cutoff)
         latency_stats = latency_data.get("latency_stats", {})
         sla_status = latency_data.get("sla_status", "UNKNOWN")
 
-        # Load patterns and compute tier statistics
+        # Count unique patterns updated in the window
+        window_counts = count_history_patterns_in_window(cutoff_time=cutoff)
+        patterns_updated = window_counts["patterns_updated"]
+
+        # Pattern-level stats (current KB state — not time-windowed, as patterns
+        # are point-in-time snapshots of the current KB, not historical aggregates)
         all_patterns = load_all_patterns()
         gold_tier_count = 0
         total_confidence = 0.0
@@ -529,7 +600,8 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
 
         logger.info(
             f"get_kb_stats: gold_count={gold_tier_count}, avg_conf={avg_confidence:.4f}, "
-            f"sample_count={latency_data.get('sample_count', 0)}"
+            f"sample_count={latency_data.get('sample_count', 0)}, "
+            f"patterns_updated={patterns_updated}, time_window={time_window}"
         )
 
         response = StatsResponse(
@@ -537,11 +609,15 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
             latency_stats=latency_stats,
             sla_status=sla_status,
             gold_tier_count=gold_tier_count,
-            avg_confidence=round(avg_confidence, 4)
+            avg_confidence=round(avg_confidence, 4),
+            patterns_updated=patterns_updated,
+            time_window=time_window,
         )
 
         return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"get_kb_stats: failed - {e}", exc_info=True)
         raise HTTPException(
@@ -679,4 +755,128 @@ async def update_pattern_confidence(request: UpdateRequest) -> UpdateResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update pattern confidence: {str(e)}"
+        )
+
+
+# ─── Reset Escape Hatch Endpoint ───────────────────────────────────────────
+
+class ResetRequest(BaseModel):
+    """Request model for KB reset."""
+    reason: str = Field(
+        default="manual_reset",
+        description="Reason for initiating reset (logged to audit trail)"
+    )
+
+
+class ResetResponse(BaseModel):
+    """Response model for KB reset."""
+    status: str = Field(..., description="'restored' | 'failed' | 'blocked'")
+    reason: str = Field(..., description="Echoed reason for reset")
+    patterns_restored: int = Field(..., description="Number of unique patterns in restored KB")
+    checkpoint_used: bool = Field(..., description="True if checkpoint existed and was used")
+    effects: List[str] = Field(default_factory=list, description="Side-effect descriptions")
+    timestamp: str = Field(..., description="ISO 8601 timestamp of reset operation")
+
+
+@router.post("/reset")
+async def reset_kb(request: ResetRequest) -> ResetResponse:
+    """
+    Reset escape hatch: restore KB to the startup checkpoint.
+
+    Atomically replaces patterns.jsonl with the checkpoint saved at service
+    startup.  Returns the number of unique patterns in the restored KB and
+    a list of side-effect messages so operators can confirm recovery.
+
+    Guards:
+    - Blocked if quarantine mode is active (escape_hatch == 'quarantine').
+    - Fails gracefully if no checkpoint exists (returns status='failed').
+
+    Returns:
+        ResetResponse with status, pattern count, and effects list.
+
+    Raises:
+        HTTPException 409: If quarantine mode is active.
+        HTTPException 503: If no checkpoint is available.
+        HTTPException 500: If restoration fails unexpectedly.
+    """
+    try:
+        from akc_service.safety_engine import load_safety_state as _load_safety_state
+        from akc_service.safety_engine import set_escape_hatch as _set_escape_hatch
+
+        logger.warning(f"reset_kb: operator-initiated KB reset — reason='{request.reason}'")
+
+        # Guard: block reset if quarantine is active
+        safety_state = _load_safety_state()
+        if safety_state.get("escape_hatch") == "quarantine":
+            logger.error("reset_kb: blocked — quarantine mode is active")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Reset blocked: quarantine mode is active. "
+                    "Lift quarantine first (POST /akc/v1/escape-hatch with mode='none'), "
+                    "then retry reset."
+                )
+            )
+
+        # Check checkpoint exists before attempting restore (uses module-level CHECKPOINT_PATH)
+        if not CHECKPOINT_PATH.exists():
+            logger.error("reset_kb: no checkpoint available")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "No checkpoint available. The service must have been started at least once "
+                    "with patterns.jsonl present to create a checkpoint."
+                )
+            )
+
+        # Perform atomic restore
+        success = restore_from_checkpoint()
+        if not success:
+            logger.error("reset_kb: restore_from_checkpoint returned False")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Checkpoint restore failed — check server logs for details."
+            )
+
+        # Verify: count unique patterns in restored KB
+        restored_patterns = load_all_patterns()
+        unique_patterns: dict = {}
+        for p in restored_patterns:
+            pid = p.get("id")
+            if pid:
+                unique_patterns[pid] = p
+        pattern_count = len(unique_patterns)
+
+        # Record reset in safety state audit trail
+        try:
+            _set_escape_hatch("reset", reason=request.reason)
+        except Exception as e:
+            logger.warning(f"reset_kb: safety state audit failed (non-fatal): {e}")
+
+        effects = [
+            f"KB patterns restored from checkpoint ({pattern_count} patterns loaded)",
+            "Audit trail preserved in confidence_history.jsonl",
+            f"Verification passed: {pattern_count} unique patterns confirmed readable",
+        ]
+
+        logger.warning(
+            f"reset_kb: restore complete — {pattern_count} patterns, reason='{request.reason}'"
+        )
+
+        return ResetResponse(
+            status="restored",
+            reason=request.reason,
+            patterns_restored=pattern_count,
+            checkpoint_used=True,
+            effects=effects,
+            timestamp=now_iso(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"reset_kb: unexpected failure — {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"KB reset failed: {str(e)}"
         )
