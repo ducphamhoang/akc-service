@@ -30,7 +30,10 @@ import os
 from pathlib import Path
 
 from akc_service.kb_exporter import export_patterns_to_markdown
-from akc_service.config import KB_EXPORT_DIR, KB_EXPORT_FORMAT, KB_EXPORT_MIN_CONFIDENCE
+from akc_service.config import (
+    KB_EXPORT_DIR, KB_EXPORT_FORMAT, KB_EXPORT_MIN_CONFIDENCE,
+    resolve_kb_dir, SAFETY_LEVEL,
+)
 
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
 KB_DIR = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
@@ -136,15 +139,23 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
     start_time = time.time()
 
     try:
+        kb_context = resolve_kb_dir(
+            kb_override=request.kb,
+            entity=None,  # Slice 1: entity inference disabled
+            global_safety_level=SAFETY_LEVEL,
+        )
+
         logger.info(
             f"query_patterns: task={request.task_id}, "
-            f"entity={request.entity}, component={request.component}"
+            f"entity={request.entity}, component={request.component}, "
+            f"KB={kb_context.name}"
         )
 
         # Call orchestrator_hooks to retrieve patterns
         active_patterns = get_active_patterns(
             entity=request.entity,
-            component=request.component
+            component=request.component,
+            kb_dir=kb_context.path,
         )
 
         # Convert orchestrator response to PatternResponse models
@@ -167,13 +178,12 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
         )
 
         # Build response
-        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = QueryResponse(
             patterns=patterns,
             query_latency_ms=elapsed_ms,
             source="kb",
-            kb_used="default",
-            routing_tier="fallback",
+            kb_used=kb_context.name,
+            routing_tier=kb_context.routing_tier,
         )
 
         return response
