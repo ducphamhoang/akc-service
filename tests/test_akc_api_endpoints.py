@@ -715,17 +715,20 @@ class TestRecordDurability:
         """
         POST /record must write to KB before returning 200.
 
-        Approach: patch PATTERNS_PATH and CONFIDENCE_HISTORY_PATH to tmp_path,
-        seed one pattern, call the real endpoint, then read patterns.jsonl back
-        and assert a second entry (the confidence update) exists.
+        Approach: patch PATTERNS_PATH, CONFIDENCE_HISTORY_PATH and KB_REGISTRY to
+        tmp_path, seed one pattern, call the real endpoint, then read patterns.jsonl
+        back and assert a second entry (the confidence update) exists.
         """
         import json as _json
         from akc_service import learning_integration as li
+        import akc_service.config as cfg
 
         monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
         monkeypatch.setattr(li, "KB_DIR", tmp_path)
         monkeypatch.setattr(li, "PATTERNS_PATH", tmp_path / "patterns.jsonl")
         monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", tmp_path / "confidence_history.jsonl")
+        # Patch KB_REGISTRY so resolve_kb_dir() returns tmp_path as the default KB
+        monkeypatch.setattr(cfg, "KB_REGISTRY", {"default": str(tmp_path)})
 
         self._seed_pattern(tmp_path, "p-dur-1", 0.70)
 

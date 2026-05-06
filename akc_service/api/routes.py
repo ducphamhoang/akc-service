@@ -221,6 +221,12 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
         HTTPException 500: If KB write fails.
     """
     try:
+        kb_context = resolve_kb_dir(
+            kb_override=request.kb,
+            entity=None,  # Slice 1: entity inference disabled
+            global_safety_level=SAFETY_LEVEL,
+        )
+
         # Validate schema version
         if request.schema_version != "1.0":
             logger.warning(
@@ -244,7 +250,7 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
 
         logger.info(
             f"record_task_outcome: task={request.task_id}, status={request.status}, "
-            f"timestamp={request.timestamp}"
+            f"timestamp={request.timestamp}, KB={kb_context.name}"
         )
 
         # Build task_result for learning integration
@@ -258,7 +264,7 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
 
         # Apply learning delta update synchronously to ensure durability
         # Confidence updates must reach KB before 202 response is sent
-        delta_result = apply_confidence_delta(task_result)
+        delta_result = apply_confidence_delta(task_result, kb_dir=kb_context.path)
 
         # Extract results for response
         active_patterns = request.akc_context.get("knowledge_patterns_active", [])
@@ -276,15 +282,14 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
             f"delta_status={delta_result.get('status', 'unknown')}"
         )
 
-        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = RecordResponse(
             accepted=True,
             task_id=request.task_id,
             update_mode="sync",
             patterns_to_update=patterns_to_update,
             timestamp=now_iso(),
-            kb_used="default",
-            routing_tier="fallback",
+            kb_used=kb_context.name,
+            routing_tier=kb_context.routing_tier,
         )
 
         return response
@@ -322,6 +327,12 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
         HTTPException 500: If pattern loading fails.
     """
     try:
+        kb_context = resolve_kb_dir(
+            kb_override=request.kb,
+            entity=None,  # Slice 1: entity inference disabled
+            global_safety_level=SAFETY_LEVEL,
+        )
+
         valid_categories = {"detection", "implementation", "testing", "documentation", "other"}
         if request.category not in valid_categories:
             logger.warning(
@@ -333,15 +344,15 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
             )
 
         logger.info(
-            f"get_pattern_fixes: category={request.category}"
+            f"get_pattern_fixes: category={request.category}, KB={kb_context.name}"
         )
 
         # Load all patterns
-        all_patterns = load_all_patterns()
+        all_patterns = load_all_patterns(kb_dir=kb_context.path)
         if not all_patterns:
             logger.warning("get_pattern_fixes: no patterns in KB")
-            # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
-            return FixResponse(fixes=[], category=request.category, count=0, kb_used="default", routing_tier="fallback")
+            return FixResponse(fixes=[], category=request.category, count=0,
+                               kb_used=kb_context.name, routing_tier=kb_context.routing_tier)
 
         # Filter by category and collect fixes
         matching_fixes = []
@@ -357,21 +368,20 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
             logger.info(
                 f"get_pattern_fixes: no fixes found for category={request.category}"
             )
-            # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
-            return FixResponse(fixes=[], category=request.category, count=0, kb_used="default", routing_tier="fallback")
+            return FixResponse(fixes=[], category=request.category, count=0,
+                               kb_used=kb_context.name, routing_tier=kb_context.routing_tier)
 
         logger.info(
             f"get_pattern_fixes: returned {len(matching_fixes)} fixes "
             f"for category={request.category}"
         )
 
-        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = FixResponse(
             fixes=matching_fixes,
             category=request.category,
             count=len(matching_fixes),
-            kb_used="default",
-            routing_tier="fallback",
+            kb_used=kb_context.name,
+            routing_tier=kb_context.routing_tier,
         )
 
         return response
