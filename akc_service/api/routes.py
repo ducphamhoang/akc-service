@@ -758,6 +758,10 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
                 )
             )
 
+        # Capture pre-reset pattern count (before restore overwrites patterns.jsonl)
+        _pre_patterns = load_all_patterns()
+        before_count = len({p["id"]: p for p in _pre_patterns if p.get("id")})
+
         # Perform atomic restore
         success = restore_from_checkpoint()
         if not success:
@@ -794,6 +798,10 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
             f"reset_kb: restore complete — {pattern_count} patterns, reason='{request.reason}'"
         )
 
+        checkpoint_created_at = datetime.fromtimestamp(
+            CHECKPOINT_PATH.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+
         return ResetResponse(
             status="restored",
             reason=request.reason,
@@ -801,6 +809,8 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
             checkpoint_used=True,
             effects=effects,
             timestamp=now_iso(),
+            checkpoint_created_at=checkpoint_created_at,
+            patterns_before_reset=before_count,
         )
 
     except HTTPException:
