@@ -89,7 +89,12 @@ class TestQueryKBRouting:
 
     @patch("akc_service.api.routes.get_active_patterns")
     def test_sc2_no_kb_field_returns_default_fallback(self, mock_patterns, client):
-        """SC-2: POST /query without kb → kb_used="default", routing_tier="fallback"."""
+        """SC-2: POST /query without kb → kb_used="default".
+
+        With Tier 2 entity routing enabled (04-01), entity="player" matches the
+        default wildcard (entity:* → "default"), so routing_tier is "entity_wildcard".
+        The KB destination is still "default" — same as before — just via a different tier.
+        """
         mock_patterns.return_value = []
         response = client.post("/akc/v1/query", json={
             "task_id": "t1",
@@ -99,7 +104,8 @@ class TestQueryKBRouting:
         assert response.status_code == 200
         data = response.json()
         assert data["kb_used"] == "default"
-        assert data["routing_tier"] == "fallback"
+        # Tier 2 routing: entity="player" matches entity:* wildcard → entity_wildcard tier
+        assert data["routing_tier"] == "entity_wildcard"
 
     @patch("akc_service.api.routes.get_active_patterns")
     def test_sc8_query_response_has_both_kb_fields(self, mock_patterns, client):

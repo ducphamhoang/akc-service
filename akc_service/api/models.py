@@ -41,6 +41,7 @@ class FixRequest(BaseModel):
     """Request model for pattern fix retrieval."""
     category: str = Field(..., description="Fix category: detection|implementation|testing|documentation|other")
     kb: Optional[str] = Field(None, description="Explicit KB name override")
+    entity: Optional[str] = Field(None, description="Entity name for KB routing via ENTITY_KB_MAPPING (e.g., 'physics', 'animation')")
 
 
 class FixResponse(BaseModel):

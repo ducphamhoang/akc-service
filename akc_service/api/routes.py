@@ -96,6 +96,27 @@ def get_active_patterns(entity: str, component: str, kb_dir: Optional[Path] = No
     matched.sort(key=lambda x: (-x["confidence"], x["id"]))
     return matched
 
+
+def _extract_entity_from_context(akc_context: dict) -> Optional[str]:
+    """Extract entity name from akc_context for Tier 2 KB routing.
+
+    Checks direct 'entity' key first, then falls back to the entity field
+    of the first active pattern in knowledge_patterns_active.
+    Returns None if no entity can be determined.
+    """
+    if not akc_context:
+        return None
+    entity = akc_context.get("entity")
+    if entity:
+        return str(entity)
+    patterns = akc_context.get("knowledge_patterns_active", [])
+    if patterns and isinstance(patterns, list):
+        first = patterns[0]
+        if isinstance(first, dict):
+            return first.get("entity")
+    return None
+
+
 logger = logging.getLogger(__name__)
 PATTERNS_PATH = KB_DIR / "patterns.jsonl"
 
@@ -142,7 +163,7 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
     try:
         kb_context = resolve_kb_dir(
             kb_override=request.kb,
-            entity=None,  # Slice 1: entity inference disabled
+            entity=request.entity,
             global_safety_level=SAFETY_LEVEL,
         )
 
@@ -222,9 +243,10 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
         HTTPException 500: If KB write fails.
     """
     try:
+        entity = _extract_entity_from_context(request.akc_context)
         kb_context = resolve_kb_dir(
             kb_override=request.kb,
-            entity=None,  # Slice 1: entity inference disabled
+            entity=entity,
             global_safety_level=SAFETY_LEVEL,
         )
 
@@ -330,7 +352,7 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
     try:
         kb_context = resolve_kb_dir(
             kb_override=request.kb,
-            entity=None,  # Slice 1: entity inference disabled
+            entity=request.entity,
             global_safety_level=SAFETY_LEVEL,
         )
 
@@ -471,7 +493,7 @@ async def get_kb_stats(
 
         kb_context = resolve_kb_dir(
             kb_override=kb,
-            entity=None,  # Slice 1: entity inference disabled
+            entity=None,  # stats endpoint: no per-request entity context
             global_safety_level=SAFETY_LEVEL,
         )
 
