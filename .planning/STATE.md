@@ -1,40 +1,62 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.5
-milestone_name: milestone
-current_phase: 04-entity-inference
-status: planning
-last_updated: "2026-05-06T08:13:30.268Z"
+milestone_name: Multi-KB Routing
+current_phase: complete
+status: shipped
+last_updated: "2026-05-06T15:19:00.000Z"
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
+  percent: 100
 ---
 
-# Project State
+# Project State: v0.5 SHIPPED ✅
 
-**Status:** Planning Phase 4
-**Current Phase:** 04-entity-inference
-**Last Updated:** 2026-05-06
+**Status:** v0.5 Multi-KB Routing COMPLETE  
+**Last Updated:** 2026-05-06  
+**Next:** v0.6 planning (Enhanced Entity Inference)
 
-## Progress
+## Project Reference
 
-- Phase 1 (Config & Resolution): COMPLETE — KBContext, resolve_kb_dir
-- Phase 2 (Module Refactoring): COMPLETE — kb_dir in all 5 engine modules
-- Phase 3 (API Integration): COMPLETE — explicit-kb Slice 1 wired in all handlers
-- Phase 4 (Entity Inference): IN PROGRESS — enable Tier 2 routing
+See: `.planning/PROJECT.md` (updated 2026-05-06)
 
-## Key Decisions
+**Core value:** Reliable knowledge base isolation with flexible request routing.
 
-- Tier 2 routing uses ENTITY_KB_MAPPING env var (JSON): `{"entity:physics": "physics", "entity:*": "default"}`
-- For /query: entity comes directly from request.entity
-- For /record: entity extracted from akc_context dict (direct "entity" key or from patterns)
-- For /fix: add optional entity field to FixRequest
-- For /stats: keep entity=None (admin endpoint, no per-entity routing needed)
-- entity=None comments (Slice 1 markers) exist at routes.py lines 145, 227, 333, 474
+## Milestone v0.5 Summary
 
-## Blockers
+**All 5 phases complete:**
+
+- Phase 1 (Config & Resolution) ✓ — KBContext, resolve_kb_dir, validate_kb_config
+- Phase 2 (Module Refactoring) ✓ — kb_dir in all 5 engine modules
+- Phase 3 (API Integration) ✓ — explicit-kb Slice 1 wired in all handlers
+- Phase 4 (Entity Inference) ✓ — Tier 2 routing with entity extraction
+- Phase 5 (Testing & Documentation) ✓ — 398 passing tests, KB_ROUTING.md guide
+
+**Deliverables:**
+- Three-tier routing (explicit kb → entity → fallback)
+- Entity inference from request context, akc_context dict, or pattern metadata
+- Wildcard support in ENTITY_KB_MAPPING for catch-all fallback
+- Full multi-KB isolation across all engine modules
+- Comprehensive test coverage (398 tests, 59 skipped)
+- Production documentation
+
+## Key Decisions (Validated)
+
+- Tier 2 routing uses ENTITY_KB_MAPPING env var (JSON format)
+- Entity extracted from multiple sources (direct field, context, pattern)
+- Wildcard support for catch-all fallback
+- All 5 engine modules propagate kb_dir parameter
+- Environment-based configuration (no hardcoded paths)
+
+## Archived
+
+- `.planning/milestones/v0.5-ROADMAP.md` — full phase details
+- `.planning/milestones/v0.5-MILESTONE-AUDIT.md` (if exists)
+- `.planning/MILESTONES.md` — historical record
+
+## Open Blockers
 
 None

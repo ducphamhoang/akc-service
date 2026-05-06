@@ -1,0 +1,10 @@
+{
+  "permission": {
+    "read": {
+      "/Users/ducph/godot/my-demon/packages/akc-service/.opencode/get-shit-done/*": "allow"
+    },
+    "external_directory": {
+      "/Users/ducph/godot/my-demon/packages/akc-service/.opencode/get-shit-done/*": "allow"
+    }
+  }
+}
