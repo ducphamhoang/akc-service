@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from akc_service.api.models import (
     RecordRequest, RecordResponse,
@@ -32,6 +32,7 @@ from pathlib import Path
 from akc_service.kb_exporter import export_patterns_to_markdown
 from akc_service.config import (
     KB_EXPORT_DIR, KB_EXPORT_FORMAT, KB_EXPORT_MIN_CONFIDENCE,
+    KB_REGISTRY,
     resolve_kb_dir, SAFETY_LEVEL,
 )
 
@@ -432,7 +433,10 @@ def _parse_time_window(window_str: str) -> Optional[datetime]:
 
 
 @router.get("/stats")
-async def get_kb_stats(time_window: str = "all") -> StatsResponse:
+async def get_kb_stats(
+    kb: Optional[str] = Query(default=None),
+    time_window: str = Query(default="all"),
+) -> StatsResponse:
     """
     Retrieve KB statistics: latency compliance, gold-tier count, average confidence.
 
@@ -441,6 +445,8 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
     filtered to only include records whose timestamp falls within the window.
 
     Args:
+        kb: Optional KB name query param. Required when multiple KBs are registered.
+            If absent and exactly one KB is registered, defaults to that KB.
         time_window: Optional query param — "all" (default), "1h", "24h", "7d", or "30d".
                      Invalid values are rejected with HTTP 400.
 
@@ -448,10 +454,27 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
         StatsResponse with latency stats, SLA status, tier metrics, and window metadata.
 
     Raises:
-        HTTPException 400: If time_window value is not one of the accepted options.
+        HTTPException 400: If kb is absent with multiple KBs registered, or time_window invalid.
         HTTPException 500: If stats collection fails.
     """
     try:
+        # Multi-KB: require explicit ?kb= when multiple KBs are registered (API-08, D-09)
+        if kb is None and len(KB_REGISTRY) > 1:
+            registered = sorted(KB_REGISTRY.keys())
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Multiple KBs registered ({registered}). "
+                    f"Specify which KB to query: GET /akc/v1/stats?kb=<name>"
+                )
+            )
+
+        kb_context = resolve_kb_dir(
+            kb_override=kb,
+            entity=None,  # Slice 1: entity inference disabled
+            global_safety_level=SAFETY_LEVEL,
+        )
+
         if time_window not in _VALID_TIME_WINDOWS:
             logger.warning(f"get_kb_stats: invalid time_window={time_window!r}")
             raise HTTPException(
@@ -467,21 +490,22 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
 
         logger.info(
             f"get_kb_stats: time_window={time_window}, "
-            f"cutoff={cutoff.isoformat() if cutoff else 'none'}"
+            f"cutoff={cutoff.isoformat() if cutoff else 'none'}, "
+            f"KB={kb_context.name}"
         )
 
         # Get latency stats filtered by the time window
-        latency_data = check_latency(cutoff_time=cutoff)
+        latency_data = check_latency(cutoff_time=cutoff, kb_dir=kb_context.path)
         latency_stats = latency_data.get("latency_stats", {})
         sla_status = latency_data.get("sla_status", "UNKNOWN")
 
         # Count unique patterns updated in the window
-        window_counts = count_history_patterns_in_window(cutoff_time=cutoff)
+        window_counts = count_history_patterns_in_window(cutoff_time=cutoff, kb_dir=kb_context.path)
         patterns_updated = window_counts["patterns_updated"]
 
         # Pattern-level stats (current KB state — not time-windowed, as patterns
         # are point-in-time snapshots of the current KB, not historical aggregates)
-        all_patterns = load_all_patterns()
+        all_patterns = load_all_patterns(kb_dir=kb_context.path)
         gold_tier_count = 0
         total_confidence = 0.0
 
@@ -502,7 +526,6 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
             f"patterns_updated={patterns_updated}, time_window={time_window}"
         )
 
-        # NOTE: kb_used/routing_tier/kb_name will be wired to resolve_kb_dir() in Plan 03-04
         response = StatsResponse(
             sample_count=latency_data.get("sample_count", 0),
             latency_stats=latency_stats,
@@ -511,9 +534,9 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
             avg_confidence=round(avg_confidence, 4),
             patterns_updated=patterns_updated,
             time_window=time_window,
-            kb_used="default",
-            routing_tier="fallback",
-            kb_name="default",
+            kb_used=kb_context.name,
+            routing_tier=kb_context.routing_tier,
+            kb_name=kb_context.name,
         )
 
         return response
