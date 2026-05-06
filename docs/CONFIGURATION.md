@@ -128,6 +128,83 @@ export AKC_SERVICE_LOG_LEVEL=DEBUG
 
 ---
 
+### Multi-KB Routing
+
+#### AKC_SERVICE_KB_REGISTRY
+
+**Type:** JSON object  
+**Default:** `{"default": "<package>/kb/"}`  
+**Purpose:** Register named knowledge base directories. Each key is a KB name; each value is its filesystem path.
+
+**Example:**
+```bash
+export AKC_SERVICE_KB_REGISTRY='{"default": "/var/lib/akc/kb/default", "physics": "/var/lib/akc/kb/physics"}'
+```
+
+**Format:**
+```json
+{
+  "default": "/var/lib/akc/kb/default",
+  "physics": "/var/lib/akc/kb/physics",
+  "ui": "/var/lib/akc/kb/ui"
+}
+```
+
+**Rules:**
+- Must be valid JSON (single-quoted shell string to avoid escaping)
+- Each value must be an absolute or relative filesystem path
+- The `default` key is not required but is the fallback target when no explicit routing matches
+- Missing directories trigger a WARNING at startup; they are created on first write
+
+**Validation:**
+```bash
+# Verify JSON is valid
+echo $AKC_SERVICE_KB_REGISTRY | python3 -m json.tool
+```
+
+See [KB_ROUTING.md](KB_ROUTING.md) for routing tier details.
+
+---
+
+#### AKC_SERVICE_ENTITY_KB_MAPPING
+
+**Type:** JSON object  
+**Default:** `{"entity:*": "default"}`  
+**Purpose:** Map entity names to KB names for automatic Tier 2 routing. Keys use the `entity:<name>` prefix. The `entity:*` key is a wildcard matching any entity not covered by an exact key.
+
+**Example:**
+```bash
+export AKC_SERVICE_ENTITY_KB_MAPPING='{"entity:physics": "physics", "entity:ui": "ui", "entity:*": "default"}'
+```
+
+**Format:**
+```json
+{
+  "entity:physics": "physics",
+  "entity:ui": "ui",
+  "entity:*": "default"
+}
+```
+
+**Key syntax:**
+- `entity:<name>` — exact match for entity named `<name>`
+- `entity:*` — wildcard, matches any entity not covered by an exact key
+
+**Rules:**
+- All values (KB names) must be registered in `AKC_SERVICE_KB_REGISTRY` — the service raises `ValueError` at startup if any mapping references an unknown KB name
+- `entity:*` is the recommended catch-all; omitting it means unmatched entities fall back to `"fallback"` tier
+- Order within the JSON object does not matter — exact keys always take precedence over the wildcard
+
+**Validation:**
+```bash
+# Verify JSON is valid
+echo $AKC_SERVICE_ENTITY_KB_MAPPING | python3 -m json.tool
+```
+
+See [KB_ROUTING.md](KB_ROUTING.md) for routing tier details and curl examples.
+
+---
+
 ## Performance Tuning
 
 ### Query Latency
