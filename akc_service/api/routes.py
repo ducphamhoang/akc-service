@@ -14,7 +14,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+
+from akc_service.api.models import (
+    RecordRequest, RecordResponse,
+    FixRequest, FixResponse,
+    StatsResponse,
+    UpdateRequest, UpdateResponse,
+    QueryRequest, PatternResponse, QueryResponse,
+    ResetRequest, ResetResponse,
+    KBExportRequest, KBExportResponse,
+)
 
 # Package-relative imports — no sys.path manipulation needed
 import os
@@ -85,151 +94,6 @@ def get_active_patterns(entity: str, component: str, kb_dir: Optional[Path] = No
 
 logger = logging.getLogger(__name__)
 PATTERNS_PATH = KB_DIR / "patterns.jsonl"
-
-# ─── Pydantic Models ───────────────────────────────────────────────────────
-
-class RecordRequest(BaseModel):
-    """Request model for recording task outcomes."""
-    schema_version: str = Field(..., description="Schema version (must be '1.0')")
-    task_id: str = Field(..., description="Unique task identifier")
-    status: str = Field(..., description="Task status: 'success' or 'failed'")
-    timestamp: str = Field(..., description="ISO 8601 timestamp of task completion")
-    akc_context: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="AKC context with active patterns and outcomes"
-    )
-
-
-class RecordResponse(BaseModel):
-    """Response model for task outcome recording."""
-    accepted: bool = Field(..., description="Whether the record was accepted")
-    task_id: str = Field(..., description="Echoed task identifier")
-    update_mode: str = Field(..., description="'async' or 'sync'")
-    patterns_to_update: int = Field(..., description="Number of patterns to update")
-    timestamp: str = Field(..., description="Server timestamp")
-
-
-class FixRequest(BaseModel):
-    """Request model for pattern fix retrieval."""
-    category: str = Field(..., description="Fix category: detection|implementation|testing|documentation|other")
-
-
-class FixResponse(BaseModel):
-    """Response model for pattern fixes."""
-    fixes: List[Dict[str, Any]] = Field(..., description="List of matching fixes")
-    category: str = Field(..., description="Echoed fix category")
-    count: int = Field(..., description="Number of fixes returned")
-
-
-class StatsRequest(BaseModel):
-    """Request model for KB statistics."""
-    time_window: str = Field(
-        default="all",
-        description="Time window: 'all', '24h', '7d', '30d'"
-    )
-
-
-class StatsResponse(BaseModel):
-    """Response model for KB statistics."""
-    sample_count: int = Field(..., description="Number of latency samples in the time window")
-    latency_stats: Dict[str, Any] = Field(..., description="Min/max/avg/p95 latency in ms")
-    sla_status: str = Field(..., description="'HEALTHY' or 'WARNING'")
-    gold_tier_count: int = Field(..., description="Number of gold-tier patterns")
-    avg_confidence: float = Field(..., description="Average confidence across KB")
-    patterns_updated: int = Field(
-        default=0,
-        description="Number of unique patterns updated in the time window"
-    )
-    time_window: str = Field(
-        default="all",
-        description="Time window applied to these stats"
-    )
-
-
-class UpdateRequest(BaseModel):
-    """Request model for direct confidence update."""
-    pattern_id: str = Field(..., description="Pattern ID to update")
-    new_score: float = Field(..., ge=0.0, le=0.95, description="New confidence score [0.0-0.95]")
-    reason: str = Field(..., description="Reason for update (e.g., 'manual override', 'flagged_issue')")
-
-
-class UpdateResponse(BaseModel):
-    """Response model for confidence update."""
-    pattern_id: str = Field(..., description="Updated pattern ID")
-    old_score: float = Field(..., description="Previous confidence score")
-    new_score: float = Field(..., description="New confidence score")
-    updated_at: str = Field(..., description="ISO 8601 update timestamp")
-
-
-class QueryRequest(BaseModel):
-    """Request model for pattern query."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "task_id": "task-001",
-                "entity": "player",
-                "component": "HealthComponent",
-                "context": {"difficulty": "hard"}
-            }
-        }
-    )
-
-    task_id: str = Field(..., description="Unique task identifier")
-    entity: str = Field(..., description="Entity name (e.g., 'player', 'enemy_knight')")
-    component: str = Field(..., description="Component name (e.g., 'HealthComponent')")
-    context: Optional[dict] = Field(
-        default=None,
-        description="Additional context for the query (optional)"
-    )
-
-
-class PatternResponse(BaseModel):
-    """Pattern metadata in response."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "id": "pattern_001",
-                "confidence": 0.85,
-                "tier": "gold"
-            }
-        }
-    )
-
-    id: str = Field(..., description="Pattern unique identifier")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
-    tier: str = Field(..., description="Confidence tier (gold, production, experimental, demoted)")
-
-
-class QueryResponse(BaseModel):
-    """Response model for pattern query."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "patterns": [
-                    {
-                        "id": "pattern_001",
-                        "confidence": 0.85,
-                        "tier": "gold"
-                    },
-                    {
-                        "id": "pattern_002",
-                        "confidence": 0.72,
-                        "tier": "production"
-                    }
-                ],
-                "query_latency_ms": 12.5,
-                "source": "kb"
-            }
-        }
-    )
-
-    patterns: List[PatternResponse] = Field(..., description="List of matching patterns")
-    query_latency_ms: float = Field(..., description="Query execution time in milliseconds")
-    source: str = Field(default="kb", description="Source of patterns (kb, cache, etc.)")
-
 
 # ─── APIRouter ─────────────────────────────────────────────────────────────
 
@@ -303,10 +167,13 @@ async def query_patterns(request: QueryRequest) -> QueryResponse:
         )
 
         # Build response
+        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = QueryResponse(
             patterns=patterns,
             query_latency_ms=elapsed_ms,
-            source="kb"
+            source="kb",
+            kb_used="default",
+            routing_tier="fallback",
         )
 
         return response
@@ -399,12 +266,15 @@ async def record_task_outcome(request: RecordRequest) -> RecordResponse:
             f"delta_status={delta_result.get('status', 'unknown')}"
         )
 
+        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = RecordResponse(
             accepted=True,
             task_id=request.task_id,
             update_mode="sync",
             patterns_to_update=patterns_to_update,
-            timestamp=now_iso()
+            timestamp=now_iso(),
+            kb_used="default",
+            routing_tier="fallback",
         )
 
         return response
@@ -460,7 +330,8 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
         all_patterns = load_all_patterns()
         if not all_patterns:
             logger.warning("get_pattern_fixes: no patterns in KB")
-            return FixResponse(fixes=[], category=request.category, count=0)
+            # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
+            return FixResponse(fixes=[], category=request.category, count=0, kb_used="default", routing_tier="fallback")
 
         # Filter by category and collect fixes
         matching_fixes = []
@@ -476,17 +347,21 @@ async def get_pattern_fixes(request: FixRequest) -> FixResponse:
             logger.info(
                 f"get_pattern_fixes: no fixes found for category={request.category}"
             )
-            return FixResponse(fixes=[], category=request.category, count=0)
+            # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
+            return FixResponse(fixes=[], category=request.category, count=0, kb_used="default", routing_tier="fallback")
 
         logger.info(
             f"get_pattern_fixes: returned {len(matching_fixes)} fixes "
             f"for category={request.category}"
         )
 
+        # NOTE: kb_used/routing_tier will be wired to resolve_kb_dir() in Plan 03-03
         response = FixResponse(
             fixes=matching_fixes,
             category=request.category,
-            count=len(matching_fixes)
+            count=len(matching_fixes),
+            kb_used="default",
+            routing_tier="fallback",
         )
 
         return response
@@ -607,6 +482,7 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
             f"patterns_updated={patterns_updated}, time_window={time_window}"
         )
 
+        # NOTE: kb_used/routing_tier/kb_name will be wired to resolve_kb_dir() in Plan 03-04
         response = StatsResponse(
             sample_count=latency_data.get("sample_count", 0),
             latency_stats=latency_stats,
@@ -615,6 +491,9 @@ async def get_kb_stats(time_window: str = "all") -> StatsResponse:
             avg_confidence=round(avg_confidence, 4),
             patterns_updated=patterns_updated,
             time_window=time_window,
+            kb_used="default",
+            routing_tier="fallback",
+            kb_name="default",
         )
 
         return response
@@ -762,43 +641,6 @@ async def update_pattern_confidence(request: UpdateRequest) -> UpdateResponse:
 
 
 # ─── Reset Escape Hatch Endpoint ───────────────────────────────────────────
-
-class ResetRequest(BaseModel):
-    """Request model for KB reset."""
-    reason: str = Field(
-        default="manual_reset",
-        description="Reason for initiating reset (logged to audit trail)"
-    )
-
-
-class ResetResponse(BaseModel):
-    """Response model for KB reset."""
-    status: str = Field(..., description="'restored' | 'failed' | 'blocked'")
-    reason: str = Field(..., description="Echoed reason for reset")
-    patterns_restored: int = Field(..., description="Number of unique patterns in restored KB")
-    checkpoint_used: bool = Field(..., description="True if checkpoint existed and was used")
-    effects: List[str] = Field(default_factory=list, description="Side-effect descriptions")
-    timestamp: str = Field(..., description="ISO 8601 timestamp of reset operation")
-
-
-class KBExportRequest(BaseModel):
-    """Request model for KB markdown export."""
-    export_path: Optional[str] = Field(None, description="Override default export path")
-    organization: str = Field("by-entity", description="Organization strategy: by-entity, by-tier, or by-pattern-type")
-    min_confidence: float = Field(0.0, ge=0.0, le=1.0, description="Minimum confidence threshold")
-    include_demoted: bool = Field(False, description="Include demoted patterns")
-    dry_run: bool = Field(False, description="Validate without writing files")
-
-
-class KBExportResponse(BaseModel):
-    """Response model for KB markdown export."""
-    success: bool = Field(..., description="Export operation success status")
-    patterns_exported: int = Field(..., description="Number of patterns exported")
-    folder: str = Field(..., description="Export folder path")
-    organization: str = Field(..., description="Organization strategy used")
-    exported_at: str = Field(..., description="ISO 8601 export timestamp")
-    error: Optional[str] = Field(None, description="Error message if export failed")
-
 
 @router.post("/reset")
 async def reset_kb(request: ResetRequest) -> ResetResponse:
