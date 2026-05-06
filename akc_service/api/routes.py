@@ -767,6 +767,14 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
                 detail="Checkpoint restore failed — check server logs for details."
             )
 
+        # Record reset in safety state audit trail (before pattern count — audit records outcome, not verification)
+        audit_ok = True
+        try:
+            _set_escape_hatch("reset", reason=request.reason)
+        except Exception as e:
+            audit_ok = False
+            logger.warning(f"reset_kb: safety state audit failed (non-fatal): {e}")
+
         # Verify: count unique patterns in restored KB
         restored_patterns = load_all_patterns()
         unique_patterns: dict = {}
@@ -776,15 +784,9 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
                 unique_patterns[pid] = p
         pattern_count = len(unique_patterns)
 
-        # Record reset in safety state audit trail
-        try:
-            _set_escape_hatch("reset", reason=request.reason)
-        except Exception as e:
-            logger.warning(f"reset_kb: safety state audit failed (non-fatal): {e}")
-
         effects = [
             f"KB patterns restored from checkpoint ({pattern_count} patterns loaded)",
-            "Audit trail preserved in confidence_history.jsonl",
+            "Audit trail updated in safety_state.json" if audit_ok else "WARNING: audit trail write failed — check server logs",
             f"Verification passed: {pattern_count} unique patterns confirmed readable",
         ]
 
