@@ -20,6 +20,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional
 
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
 KB_DIR = Path(os.environ.get("AKC_SERVICE_KB_DIR", str(_DEFAULT_KB_DIR)))
@@ -57,11 +58,13 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def load_all_patterns() -> list:
+def load_all_patterns(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
     patterns = []
-    if not PATTERNS_PATH.exists():
+    if not patterns_path.exists():
         return patterns
-    with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+    with open(patterns_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -72,11 +75,13 @@ def load_all_patterns() -> list:
     return patterns
 
 
-def load_fix_history() -> list:
+def load_fix_history(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    fix_history_path = effective_kb_dir / "fix_history.jsonl"
     fixes = []
-    if not FIX_HISTORY_PATH.exists():
+    if not fix_history_path.exists():
         return fixes
-    with open(FIX_HISTORY_PATH, "r", encoding="utf-8") as f:
+    with open(fix_history_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -87,11 +92,13 @@ def load_fix_history() -> list:
     return fixes
 
 
-def load_failure_index() -> list:
+def load_failure_index(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    failure_index_path = effective_kb_dir / "failure_index.jsonl"
     failures = []
-    if not FAILURE_INDEX_PATH.exists():
+    if not failure_index_path.exists():
         return failures
-    with open(FAILURE_INDEX_PATH, "r", encoding="utf-8") as f:
+    with open(failure_index_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -102,11 +109,13 @@ def load_failure_index() -> list:
     return failures
 
 
-def load_confidence_history() -> list:
+def load_confidence_history(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    confidence_history_path = effective_kb_dir / "confidence_history.jsonl"
     history = []
-    if not CONFIDENCE_HISTORY_PATH.exists():
+    if not confidence_history_path.exists():
         return history
-    with open(CONFIDENCE_HISTORY_PATH, "r", encoding="utf-8") as f:
+    with open(confidence_history_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -119,10 +128,10 @@ def load_confidence_history() -> list:
 
 # ─── Metric Collectors ─────────────────────────────────────────────────────────
 
-def compute_task_success_rate() -> dict:
+def compute_task_success_rate(kb_dir: Optional[Path] = None) -> dict:
     """Compute task success rate from failure index and fix history."""
-    failures = load_failure_index()
-    fixes = load_fix_history()
+    failures = load_failure_index(kb_dir=kb_dir)
+    fixes = load_fix_history(kb_dir=kb_dir)
 
     total_tasks = len(failures) + len(fixes)
 
@@ -158,9 +167,9 @@ def compute_task_success_rate() -> dict:
     }
 
 
-def compute_confidence_distribution() -> dict:
+def compute_confidence_distribution(kb_dir: Optional[Path] = None) -> dict:
     """Compute tier distribution from patterns.jsonl."""
-    patterns = load_all_patterns()
+    patterns = load_all_patterns(kb_dir=kb_dir)
 
     tier_counts = {"gold": 0, "production": 0, "experimental": 0, "demoted": 0}
     for p in patterns:
@@ -180,9 +189,9 @@ def compute_confidence_distribution() -> dict:
     }
 
 
-def compute_rollback_frequency() -> dict:
+def compute_rollback_frequency(kb_dir: Optional[Path] = None) -> dict:
     """Compute rollback frequency from fix history."""
-    fixes = load_fix_history()
+    fixes = load_fix_history(kb_dir=kb_dir)
     now = datetime.now(timezone.utc)
     day_ago = now - timedelta(days=1)
     week_ago = now - timedelta(days=7)
@@ -233,9 +242,9 @@ def compute_active_conflicts() -> dict:
         }
 
 
-def compute_confidence_drop() -> dict:
+def compute_confidence_drop(kb_dir: Optional[Path] = None) -> dict:
     """Detect patterns with >15% confidence drop in 24h."""
-    history = load_confidence_history()
+    history = load_confidence_history(kb_dir=kb_dir)
     now = datetime.now(timezone.utc)
     day_ago = now - timedelta(hours=24)
 
@@ -293,16 +302,16 @@ def _tier_from_confidence(confidence: float) -> str:
 
 # ─── Monitor Mode ──────────────────────────────────────────────────────────────
 
-def run_monitor() -> dict:
+def run_monitor(kb_dir: Optional[Path] = None) -> dict:
     """
     Collect all monitoring metrics and return consolidated status.
     Updates every 5 minutes (call from cron or scheduler).
     """
     metrics = {
-        "task_success_rate": compute_task_success_rate(),
-        "confidence_distribution": compute_confidence_distribution(),
-        "rollback_frequency": compute_rollback_frequency(),
-        "confidence_drop_24h": compute_confidence_drop(),
+        "task_success_rate": compute_task_success_rate(kb_dir=kb_dir),
+        "confidence_distribution": compute_confidence_distribution(kb_dir=kb_dir),
+        "rollback_frequency": compute_rollback_frequency(kb_dir=kb_dir),
+        "confidence_drop_24h": compute_confidence_drop(kb_dir=kb_dir),
         "active_conflicts": compute_active_conflicts(),
     }
 
@@ -552,7 +561,7 @@ def _send_email(alert: dict, recipients: list) -> dict:
 
 # ─── Phase 4 Wave 3: Real-Time Monitoring Dashboard ──────────────────────────────
 
-def compute_dashboard_metrics() -> dict:
+def compute_dashboard_metrics(kb_dir: Optional[Path] = None) -> dict:
     """
     Compute real-time metrics for dashboard. Run every 60s during deployment.
 
@@ -585,11 +594,13 @@ def compute_dashboard_metrics() -> dict:
         ]
     }
     """
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
     # Load current metrics from KB files
-    patterns = load_all_patterns()
+    patterns = load_all_patterns(kb_dir=kb_dir)
     failures = []
-    if FAILURE_INDEX_PATH.exists():
-        with open(FAILURE_INDEX_PATH, "r", encoding="utf-8") as f:
+    failure_index_path = effective_kb_dir / "failure_index.jsonl"
+    if failure_index_path.exists():
+        with open(failure_index_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -606,7 +617,7 @@ def compute_dashboard_metrics() -> dict:
 
     # Compute error rate per active cohort
     error_by_cohort = {}
-    staging_metrics_path = KB_DIR / "staging" / "staging_metrics.jsonl"
+    staging_metrics_path = effective_kb_dir / "staging" / "staging_metrics.jsonl"
 
     for cohort_num in [1, 2, 3]:
         cohort_metrics = {
