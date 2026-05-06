@@ -26,6 +26,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import os
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
@@ -328,14 +329,16 @@ def load_failure_by_id(failure_id: str) -> dict | None:
     return None
 
 
-def load_patterns() -> list:
+def load_patterns(kb_dir: Optional[Path] = None) -> list:
     """Load all patterns from KB patterns.jsonl."""
-    return load_jsonl(PATTERNS_PATH)
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+    return load_jsonl(patterns_path)
 
 
 # ─── Factor 1: Pattern Matching ────────────────────────────────────────────────
 
-def factor_pattern_matching(entity: str, component: str, error_message: str) -> dict:
+def factor_pattern_matching(entity: str, component: str, error_message: str, kb_dir: Optional[Path] = None) -> dict:
     """
     Factor 1 (weight 0.40): Exact entity:component:error pattern match in KB.
 
@@ -345,7 +348,7 @@ def factor_pattern_matching(entity: str, component: str, error_message: str) -> 
     Returns:
         dict with score (0.0-1.0), matched_pattern_id, match_type
     """
-    patterns = load_patterns()
+    patterns = load_patterns(kb_dir=kb_dir)
 
     # Direct KB pattern lookup by entity + component
     for p in patterns:
@@ -396,7 +399,7 @@ def factor_pattern_matching(entity: str, component: str, error_message: str) -> 
 
 # ─── Factor 2: Semantic Similarity ─────────────────────────────────────────────
 
-def factor_semantic_similarity(error_message: str, entity: str, component: str) -> dict:
+def factor_semantic_similarity(error_message: str, entity: str, component: str, kb_dir: Optional[Path] = None) -> dict:
     """
     Factor 2 (weight 0.35): Error message similarity to existing KB patterns.
 
@@ -411,7 +414,7 @@ def factor_semantic_similarity(error_message: str, entity: str, component: str) 
     if len(error_message) > MAX_ERROR_MSG_LEN:
         error_message = error_message[:MAX_ERROR_MSG_LEN]
 
-    patterns = load_patterns()
+    patterns = load_patterns(kb_dir=kb_dir)
     error_tokens = set(re.findall(r"\b\w{3,}\b", error_message.lower()))
 
     # Remove stop words
@@ -549,6 +552,7 @@ def analyze_root_cause(
     error_message: str,
     task_id: str = "unknown",
     timeout_s: int = ANALYSIS_TIMEOUT_S,
+    kb_dir: Optional[Path] = None,
 ) -> dict:
     """
     Multi-factor root cause analysis combining 3 weighted factors.
@@ -563,17 +567,17 @@ def analyze_root_cause(
     start_time = time.time()
 
     # Cap top-20 patterns for DoS protection (T-FIX-03)
-    patterns = load_patterns()[:20]  # noqa: F841
+    patterns = load_patterns(kb_dir=kb_dir)[:20]  # noqa: F841
 
     # Factor 1: Pattern matching
-    f1 = factor_pattern_matching(entity, component, error_message)
+    f1 = factor_pattern_matching(entity, component, error_message, kb_dir=kb_dir)
 
     # Check timeout
     if time.time() - start_time > timeout_s:
         return {"error": "Analysis timeout exceeded", "timeout": True}
 
     # Factor 2: Semantic similarity
-    f2 = factor_semantic_similarity(error_message, entity, component)
+    f2 = factor_semantic_similarity(error_message, entity, component, kb_dir=kb_dir)
 
     # Check timeout
     if time.time() - start_time > timeout_s:
@@ -637,7 +641,7 @@ def analyze_root_cause(
 
 # ─── Detect Failure (CLI entry: --detect-failure) ─────────────────────────────
 
-def detect_failure(failure_json_str: str) -> dict:
+def detect_failure(failure_json_str: str, kb_dir: Optional[Path] = None) -> dict:
     """
     Detect and record a failure from a JSON failure event.
 
@@ -669,7 +673,7 @@ def detect_failure(failure_json_str: str) -> dict:
     failure_id = make_failure_id(task_id)
 
     # Multi-factor root cause analysis
-    analysis = analyze_root_cause(entity, component, error_message, task_id)
+    analysis = analyze_root_cause(entity, component, error_message, task_id, kb_dir=kb_dir)
 
     # Add timeout check BEFORE building signature (CR-01 mitigation)
     if analysis.get("timeout"):
@@ -829,7 +833,7 @@ def check_sdk_available() -> bool:
 
 # ─── Validate Accuracy (CLI entry: --validate-accuracy) ─────────────────────────
 
-def validate_accuracy() -> dict:
+def validate_accuracy(kb_dir: Optional[Path] = None) -> dict:
     """
     Run accuracy validation against 20 test failure scenarios.
 
@@ -852,7 +856,7 @@ def validate_accuracy() -> dict:
         task_id = scenario["task_id"]
 
         # Run multi-factor analysis
-        analysis = analyze_root_cause(entity, component, error_message, task_id)
+        analysis = analyze_root_cause(entity, component, error_message, task_id, kb_dir=kb_dir)
 
         detected_id = analysis.get("root_cause_pattern_id", "")
         confidence = analysis.get("confidence_score", 0.0)

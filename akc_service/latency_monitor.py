@@ -30,6 +30,7 @@ import random
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional
 
 import os
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
@@ -72,13 +73,14 @@ def seconds_between(t_start: str, t_end: str) -> float:
         return 0.0
 
 
-def ensure_kb_dir() -> None:
-    KB_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_kb_dir(kb_dir: Optional[Path] = None) -> None:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    effective_kb_dir.mkdir(parents=True, exist_ok=True)
 
 
 def append_jsonl(path: Path, entry: dict) -> None:
     """Immutable append to JSONL file."""
-    ensure_kb_dir()
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
@@ -100,7 +102,7 @@ def load_jsonl(path: Path) -> list:
 
 # ─── Latency Tracking ────────────────────────────────────────────────────────────
 
-def track_candidate_latency(candidate_id: str, timestamps: dict | None = None) -> dict:
+def track_candidate_latency(candidate_id: str, timestamps: dict | None = None, kb_dir: Optional[Path] = None) -> dict:
     """
     Log latency checkpoint for a candidate.
 
@@ -111,10 +113,15 @@ def track_candidate_latency(candidate_id: str, timestamps: dict | None = None) -
       {"T0": "ISO", "T1": "ISO", ..., "T6": "ISO"}
     Any missing timestamps are approximated from available data.
     """
-    ensure_kb_dir()
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    ensure_kb_dir(kb_dir)
 
     if timestamps is None:
-        timestamps = _infer_timestamps(candidate_id)
+        timestamps = _infer_timestamps(
+            candidate_id,
+            routing_dir=effective_kb_dir / "routing",
+            staging_dir=effective_kb_dir / "staging",
+        )
 
     t0 = timestamps.get("T0")
     t1 = timestamps.get("T1")
@@ -161,22 +168,26 @@ def track_candidate_latency(candidate_id: str, timestamps: dict | None = None) -
         "tracked_at": now_iso(),
     }
 
-    append_jsonl(LATENCY_HISTORY_PATH, entry)
+    latency_history_path = effective_kb_dir / "latency_samples.jsonl"
+    append_jsonl(latency_history_path, entry)
     return entry
 
 
-def _infer_timestamps(candidate_id: str) -> dict:
+def _infer_timestamps(candidate_id: str, routing_dir: Optional[Path] = None, staging_dir: Optional[Path] = None) -> dict:
     """
     Attempt to infer T0–T6 timestamps from existing pipeline/routing data.
     Falls back to None for missing timestamps.
     """
+    effective_routing_dir = routing_dir if routing_dir is not None else ROUTING_DIR
+    effective_staging_dir = staging_dir if staging_dir is not None else STAGING_DIR
+
     timestamps = {}
 
     # T4/T5: from routing queue files
     queue_files = [
-        ROUTING_DIR / "tier_1_queue.jsonl",
-        ROUTING_DIR / "tier_2_queue.jsonl",
-        ROUTING_DIR / "tier_3_queue.jsonl",
+        effective_routing_dir / "tier_1_queue.jsonl",
+        effective_routing_dir / "tier_2_queue.jsonl",
+        effective_routing_dir / "tier_3_queue.jsonl",
     ]
     for qf in queue_files:
         for entry in load_jsonl(qf):
@@ -187,7 +198,8 @@ def _infer_timestamps(candidate_id: str) -> dict:
                 break
 
     # T5, T6: from staging pipeline
-    staging_entries = load_jsonl(STAGING_DIR / "staging_pipeline.jsonl") if (STAGING_DIR / "staging_pipeline.jsonl").exists() else []
+    staging_pipeline = effective_staging_dir / "staging_pipeline.jsonl"
+    staging_entries = load_jsonl(staging_pipeline) if staging_pipeline.exists() else []
     for entry in reversed(staging_entries):
         if entry.get("candidate_id") == candidate_id:
             if entry.get("staging_start_time"):
@@ -224,9 +236,10 @@ def _compute_stats(values: list) -> dict:
     }
 
 
-def get_latency_stats() -> dict:
+def get_latency_stats(kb_dir: Optional[Path] = None) -> dict:
     """Return min/max/avg/p95 latency across all candidates."""
-    entries = load_jsonl(LATENCY_HISTORY_PATH)
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    entries = load_jsonl(effective_kb_dir / "latency_samples.jsonl")
 
     if not entries:
         return {
@@ -326,12 +339,13 @@ def get_latency_stats() -> dict:
 
 # ─── SLA Validation ───────────────────────────────────────────────────────────────
 
-def validate_latency_sla() -> dict:
+def validate_latency_sla(kb_dir: Optional[Path] = None) -> dict:
     """
     Check if all tracked candidates are within 7-minute SLA.
     Returns SLA compliance report.
     """
-    entries = load_jsonl(LATENCY_HISTORY_PATH)
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    entries = load_jsonl(effective_kb_dir / "latency_samples.jsonl")
 
     if not entries:
         return {
@@ -403,6 +417,7 @@ def _generate_synthetic_latency(
     candidate_id: str,
     failure_id: str,
     seed_offset: int = 0,
+    kb_dir: Optional[Path] = None,
 ) -> dict:
     """
     Generate a synthetic latency record for baseline establishment.
@@ -452,10 +467,10 @@ def _generate_synthetic_latency(
         "T6": fmt(t6_dt),
     }
 
-    return track_candidate_latency(candidate_id, timestamps)
+    return track_candidate_latency(candidate_id, timestamps, kb_dir=kb_dir)
 
 
-def establish_baseline(sample_count: int = 10) -> dict:
+def establish_baseline(sample_count: int = 10, kb_dir: Optional[Path] = None) -> dict:
     """
     Run N synthetic test candidate latencies to establish performance baseline.
     Uses synthetic test failures from failure_detection simulation.
@@ -467,13 +482,13 @@ def establish_baseline(sample_count: int = 10) -> dict:
     for i in range(sample_count):
         candidate_id = f"baseline-cand-{i+1:02d}"
         failure_id = f"baseline-failure-{i+1:02d}"
-        entry = _generate_synthetic_latency(candidate_id, failure_id, seed_offset=i)
+        entry = _generate_synthetic_latency(candidate_id, failure_id, seed_offset=i, kb_dir=kb_dir)
         generated.append(entry)
         total_sec = entry.get("total_latency_seconds", 0)
         sla = entry.get("sla_status", "?")
         print(f"  [{i+1:2d}/{sample_count}] {candidate_id}: {total_sec:.0f}s ({total_sec/60:.1f} min) — {sla}")
 
-    stats = validate_latency_sla()
+    stats = validate_latency_sla(kb_dir=kb_dir)
 
     print(f"\nBaseline established: {sample_count} candidates")
     print(f"  Avg latency: {stats.get('avg_latency_minutes', '?')} min")
@@ -481,15 +496,15 @@ def establish_baseline(sample_count: int = 10) -> dict:
     print(f"  SLA status:  {stats.get('sla_status', '?')}")
 
     # Write LATENCY_BASELINE.md
-    _write_latency_baseline(stats, generated)
+    _write_latency_baseline(stats, generated, kb_dir=kb_dir)
 
     return stats
 
 
-def _write_latency_baseline(stats: dict, generated: list) -> None:
+def _write_latency_baseline(stats: dict, generated: list, kb_dir: Optional[Path] = None) -> None:
     """Write LATENCY_BASELINE.md with performance baseline metrics."""
     latency = stats.get("latency", {})
-    full_stats = get_latency_stats()
+    full_stats = get_latency_stats(kb_dir=kb_dir)
     phase_stats = full_stats.get("phase_stats", {})
 
     def fmt_seconds(sec: float | None) -> str:
@@ -618,13 +633,13 @@ If latency exceeds targets:
 
 # ─── Dashboard Integration ────────────────────────────────────────────────────────
 
-def latency_stats_dashboard() -> dict:
+def latency_stats_dashboard(kb_dir: Optional[Path] = None) -> dict:
     """
     Dashboard command: --latency-stats
     Returns summary metrics for dashboard display.
     """
-    sla_report = validate_latency_sla()
-    full_stats = get_latency_stats()
+    sla_report = validate_latency_sla(kb_dir=kb_dir)
+    full_stats = get_latency_stats(kb_dir=kb_dir)
 
     return {
         "command": "latency_stats",
