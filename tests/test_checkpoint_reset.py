@@ -333,6 +333,36 @@ def test_reset_reports_pattern_count_after_restore(temp_kb_dir):
 
 # ─── /reset REST API Endpoint Tests ─────────────────────────────────────────
 
+def _reload_all_for_kb(tmp_path, monkeypatch):
+    """Helper: set AKC_SERVICE_KB_DIR + AKC_SERVICE_KB_REGISTRY to tmp_path and reload all modules."""
+    import json as _json
+    import importlib
+    monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
+    monkeypatch.setenv("AKC_SERVICE_KB_REGISTRY", _json.dumps({"default": str(tmp_path)}))
+    import akc_service.config as cfg
+    import akc_service.learning_integration as li
+    import akc_service.safety_engine as se
+    import akc_service.api.routes as r
+    importlib.reload(cfg)
+    importlib.reload(li)
+    importlib.reload(se)
+    importlib.reload(r)
+    return li, se, r
+
+
+def _restore_all():
+    """Helper: restore all modules after test."""
+    import importlib
+    import akc_service.config as cfg
+    import akc_service.learning_integration as li
+    import akc_service.safety_engine as se
+    import akc_service.api.routes as r
+    importlib.reload(cfg)
+    importlib.reload(li)
+    importlib.reload(se)
+    importlib.reload(r)
+
+
 class TestResetEndpoint:
     """Tests for the /akc/v1/reset REST endpoint."""
 
@@ -344,22 +374,11 @@ class TestResetEndpoint:
 
     def test_reset_returns_restored_when_checkpoint_exists(self, api_client, tmp_path, monkeypatch):
         """POST /reset restores KB from checkpoint and returns status='restored'."""
-        # Create a real checkpoint file in a temp dir and set the KB env var
-        import os
-        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
-
         checkpoint_content = '{"id": "pat-1", "confidence": 0.90}\n'
         (tmp_path / "patterns.checkpoint").write_text(checkpoint_content)
         (tmp_path / "patterns.jsonl").write_text('{"id": "pat-bad", "confidence": 0.05}\n')
 
-        # Reload modules so they pick up the new KB_DIR env var
-        import importlib
-        import akc_service.learning_integration as li
-        import akc_service.safety_engine as se
-        import akc_service.api.routes as r
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _reload_all_for_kb(tmp_path, monkeypatch)
 
         response = api_client.post("/akc/v1/reset", json={"reason": "test_reset"})
         assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
@@ -371,17 +390,11 @@ class TestResetEndpoint:
         assert "timestamp" in data
         assert len(data["effects"]) > 0
 
-        # Restore modules
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _restore_all()
 
     def test_reset_blocked_by_quarantine(self, api_client, tmp_path, monkeypatch):
         """POST /reset returns 409 when quarantine mode is active."""
         import json
-        import os
-        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
-
         # Write checkpoint so we don't fail on missing checkpoint first
         (tmp_path / "patterns.checkpoint").write_text('{"id": "pat-1", "confidence": 0.90}\n')
         (tmp_path / "patterns.jsonl").write_text('{"id": "pat-1", "confidence": 0.90}\n')
@@ -389,13 +402,7 @@ class TestResetEndpoint:
         quarantine_state = {"escape_hatch": "quarantine", "escape_hatch_set_at": "2026-01-01T00:00:00Z"}
         (tmp_path / "safety_state.json").write_text(json.dumps(quarantine_state))
 
-        import importlib
-        import akc_service.learning_integration as li
-        import akc_service.safety_engine as se
-        import akc_service.api.routes as r
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _reload_all_for_kb(tmp_path, monkeypatch)
 
         response = api_client.post("/akc/v1/reset", json={"reason": "test"})
         assert response.status_code == 409, f"Got {response.status_code}: {response.text}"
@@ -404,26 +411,14 @@ class TestResetEndpoint:
         error_msg = data.get("error") or data.get("detail") or ""
         assert "quarantine" in error_msg.lower(), f"Expected 'quarantine' in error, got: {data}"
 
-        # Restore modules
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _restore_all()
 
     def test_reset_returns_503_when_no_checkpoint(self, api_client, tmp_path, monkeypatch):
         """POST /reset returns 503 when no checkpoint file exists."""
-        import os
-        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
-
         # Only create patterns.jsonl, no checkpoint
         (tmp_path / "patterns.jsonl").write_text('{"id": "pat-1", "confidence": 0.90}\n')
 
-        import importlib
-        import akc_service.learning_integration as li
-        import akc_service.safety_engine as se
-        import akc_service.api.routes as r
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _reload_all_for_kb(tmp_path, monkeypatch)
 
         response = api_client.post("/akc/v1/reset", json={"reason": "test"})
         assert response.status_code == 503, f"Got {response.status_code}: {response.text}"
@@ -432,26 +427,14 @@ class TestResetEndpoint:
         error_msg = data.get("error") or data.get("detail") or ""
         assert "checkpoint" in error_msg.lower(), f"Expected 'checkpoint' in error, got: {data}"
 
-        # Restore modules
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _restore_all()
 
     def test_reset_response_has_required_fields(self, api_client, tmp_path, monkeypatch):
         """POST /reset response includes all required fields."""
-        import os
-        monkeypatch.setenv("AKC_SERVICE_KB_DIR", str(tmp_path))
-
         (tmp_path / "patterns.checkpoint").write_text('{"id": "pat-1", "confidence": 0.90}\n')
         (tmp_path / "patterns.jsonl").write_text('{"id": "pat-bad", "confidence": 0.05}\n')
 
-        import importlib
-        import akc_service.learning_integration as li
-        import akc_service.safety_engine as se
-        import akc_service.api.routes as r
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _reload_all_for_kb(tmp_path, monkeypatch)
 
         response = api_client.post("/akc/v1/reset", json={"reason": "verify_fields"})
         assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
@@ -460,10 +443,111 @@ class TestResetEndpoint:
         for field in required_fields:
             assert field in data, f"Missing required field: {field}"
 
-        # Restore modules
-        importlib.reload(li)
-        importlib.reload(se)
-        importlib.reload(r)
+        _restore_all()
+
+    # ─── New Tests: kb param routing, telemetry fields, audit failure ─────────
+
+    def test_reset_response_includes_new_fields(self, api_client, tmp_path, monkeypatch):
+        """POST /reset response includes checkpoint_created_at (ISO 8601) and patterns_before_reset (int)."""
+        (tmp_path / "patterns.checkpoint").write_text('{"id": "pat-1", "confidence": 0.90}\n')
+        (tmp_path / "patterns.jsonl").write_text('{"id": "pat-bad", "confidence": 0.05}\n')
+
+        _reload_all_for_kb(tmp_path, monkeypatch)
+
+        response = api_client.post("/akc/v1/reset", json={"reason": "test_new_fields"})
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        data = response.json()
+
+        # checkpoint_created_at must be a non-empty ISO 8601 string
+        assert "checkpoint_created_at" in data, "Missing checkpoint_created_at"
+        assert isinstance(data["checkpoint_created_at"], str)
+        assert len(data["checkpoint_created_at"]) > 0
+        assert "T" in data["checkpoint_created_at"], "checkpoint_created_at must be ISO 8601 (contains T)"
+
+        # patterns_before_reset must be a non-negative integer
+        assert "patterns_before_reset" in data, "Missing patterns_before_reset"
+        assert isinstance(data["patterns_before_reset"], int)
+        assert data["patterns_before_reset"] >= 0
+
+        _restore_all()
+
+    def test_reset_kb_patterns_before_reset_count(self, api_client, tmp_path, monkeypatch):
+        """patterns_before_reset reflects count before restore; patterns_restored reflects checkpoint count."""
+        import json
+
+        # Checkpoint has 2 patterns
+        checkpoint_patterns = [
+            {"id": "pat-1", "confidence": 0.90, "name": "Checkpoint Pattern 1"},
+            {"id": "pat-2", "confidence": 0.75, "name": "Checkpoint Pattern 2"},
+        ]
+        (tmp_path / "patterns.checkpoint").write_text(
+            "\n".join(json.dumps(p) for p in checkpoint_patterns) + "\n"
+        )
+
+        # Current patterns.jsonl has 3 patterns (different ids)
+        current_patterns = [
+            {"id": "cur-1", "confidence": 0.50, "name": "Current Pattern 1"},
+            {"id": "cur-2", "confidence": 0.60, "name": "Current Pattern 2"},
+            {"id": "cur-3", "confidence": 0.70, "name": "Current Pattern 3"},
+        ]
+        (tmp_path / "patterns.jsonl").write_text(
+            "\n".join(json.dumps(p) for p in current_patterns) + "\n"
+        )
+
+        _reload_all_for_kb(tmp_path, monkeypatch)
+
+        response = api_client.post("/akc/v1/reset", json={"reason": "test_counts"})
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        data = response.json()
+
+        assert data["patterns_before_reset"] == 3, f"Expected 3, got {data['patterns_before_reset']}"
+        assert data["patterns_restored"] == 2, f"Expected 2, got {data['patterns_restored']}"
+
+        _restore_all()
+
+    def test_reset_kb_audit_failure_warns_in_effects(self, api_client, tmp_path, monkeypatch):
+        """When set_escape_hatch raises, effects list contains audit failure warning."""
+        (tmp_path / "patterns.checkpoint").write_text('{"id": "pat-1", "confidence": 0.90}\n')
+        (tmp_path / "patterns.jsonl").write_text('{"id": "pat-bad", "confidence": 0.05}\n')
+
+        _reload_all_for_kb(tmp_path, monkeypatch)
+
+        # Patch set_escape_hatch in safety_engine module to raise — reset_kb() imports it via
+        # `from akc_service.safety_engine import set_escape_hatch as _set_escape_hatch` on each call
+        import akc_service.safety_engine as se
+
+        def _raise_escape_hatch(*args, **kwargs):
+            raise RuntimeError("Simulated audit write failure")
+
+        monkeypatch.setattr(se, "set_escape_hatch", _raise_escape_hatch)
+
+        response = api_client.post("/akc/v1/reset", json={"reason": "test_audit_fail"})
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        data = response.json()
+
+        effects = data.get("effects", [])
+        assert any("WARNING" in e and "audit trail write failed" in e for e in effects), \
+            f"Expected audit failure warning in effects, got: {effects}"
+
+        _restore_all()
+
+    def test_reset_kb_default_kb_backward_compat(self, api_client, tmp_path, monkeypatch):
+        """POST /reset without kb param succeeds — backward compatible with pre-multi-KB deployments."""
+        (tmp_path / "patterns.checkpoint").write_text('{"id": "pat-1", "confidence": 0.90}\n')
+        (tmp_path / "patterns.jsonl").write_text('{"id": "pat-bad", "confidence": 0.05}\n')
+
+        _reload_all_for_kb(tmp_path, monkeypatch)
+
+        # Send request WITHOUT kb param — backward compatible
+        response = api_client.post("/akc/v1/reset", json={"reason": "backward_compat_test"})
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        data = response.json()
+        assert data["status"] == "restored"
+        # No KeyError, no 500, no exception
+        assert "patterns_restored" in data
+        assert data["checkpoint_used"] is True
+
+        _restore_all()
 
 
 if __name__ == "__main__":
