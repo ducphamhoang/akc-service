@@ -4,6 +4,10 @@
 .gemini/
 .copilot/
 
+# Temporary files
+.temp-*
+*.tmp
+
 # Python
 __pycache__/
 *.py[cod]
