@@ -198,7 +198,7 @@ def invalidate_pattern_index() -> None:
     _pattern_index_mtime = None
 
 
-def get_deduped_patterns() -> list:
+def get_deduped_patterns(kb_dir: Optional[Path] = None) -> list:
     """
     Return all active patterns, deduplicated to the most recent version per ID,
     sorted deterministically by pattern ID.
@@ -207,10 +207,16 @@ def get_deduped_patterns() -> list:
     consistent view of the KB.  Replaces raw load_all_patterns() calls where
     determinism matters (e.g. /query endpoint).
 
+    Args:
+        kb_dir: Optional KB directory; uses module-level KB_DIR when None.
+
     Returns:
         List of pattern dicts sorted by "id" ascending.
     """
-    index = _get_pattern_index()
+    if kb_dir is not None:
+        index = build_pattern_index(kb_dir=kb_dir)
+    else:
+        index = _get_pattern_index()
     return sorted(index.values(), key=lambda p: p.get("id", ""))
 
 
@@ -950,7 +956,7 @@ def apply_confidence_delta(task_result: dict, kb_dir: Optional[Path] = None) -> 
 
 # ─── Latency Monitoring ─────────────────────────────────────────────────────────
 
-def _load_history_entries(cutoff_time: Optional[datetime] = None) -> list:
+def _load_history_entries(cutoff_time: Optional[datetime] = None, kb_dir: Optional[Path] = None) -> list:
     """
     Load confidence history entries from confidence_history.jsonl.
 
@@ -958,15 +964,18 @@ def _load_history_entries(cutoff_time: Optional[datetime] = None) -> list:
         cutoff_time: If provided (timezone-aware UTC datetime), only entries
                      with timestamp >= cutoff_time are returned. If None, all
                      entries are returned.
+        kb_dir: Optional KB directory; uses module-level KB_DIR when None.
 
     Returns:
         List of parsed history entry dicts that pass the time filter.
     """
-    if not CONFIDENCE_HISTORY_PATH.exists():
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    history_path = effective_kb_dir / "confidence_history.jsonl"
+    if not history_path.exists():
         return []
 
     entries = []
-    with open(CONFIDENCE_HISTORY_PATH, "r", encoding="utf-8") as f:
+    with open(history_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -990,7 +999,7 @@ def _load_history_entries(cutoff_time: Optional[datetime] = None) -> list:
     return entries
 
 
-def count_history_patterns_in_window(cutoff_time: Optional[datetime] = None) -> dict:
+def count_history_patterns_in_window(cutoff_time: Optional[datetime] = None, kb_dir: Optional[Path] = None) -> dict:
     """
     Count unique patterns and update events in confidence_history.jsonl
     within the given time window.
@@ -999,13 +1008,14 @@ def count_history_patterns_in_window(cutoff_time: Optional[datetime] = None) -> 
         cutoff_time: If provided (timezone-aware UTC datetime), only entries
                      at or after this time are counted. If None, all entries
                      are counted.
+        kb_dir: Optional KB directory; uses module-level KB_DIR when None.
 
     Returns:
         dict with:
             "patterns_updated": int  — unique pattern IDs touched in the window
             "total_updates":    int  — total update events in the window
     """
-    entries = _load_history_entries(cutoff_time=cutoff_time)
+    entries = _load_history_entries(cutoff_time=cutoff_time, kb_dir=kb_dir)
     unique_ids: set = set()
     for entry in entries:
         pid = entry.get("pattern_id")
@@ -1017,7 +1027,7 @@ def count_history_patterns_in_window(cutoff_time: Optional[datetime] = None) -> 
     }
 
 
-def check_latency(cutoff_time: Optional[datetime] = None) -> dict:
+def check_latency(cutoff_time: Optional[datetime] = None, kb_dir: Optional[Path] = None) -> dict:
     """
     Check learning latency compliance (<5 minutes SLA).
 
@@ -1025,10 +1035,14 @@ def check_latency(cutoff_time: Optional[datetime] = None) -> dict:
         cutoff_time: If provided (timezone-aware UTC datetime), only history
                      entries at or after this time are included in the stats.
                      If None, all entries are used (all-time behaviour).
+        kb_dir: Optional KB directory; uses module-level KB_DIR when None.
 
     Returns:
         dict with latency statistics and SLA status
     """
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    history_path = effective_kb_dir / "confidence_history.jsonl"
+
     _empty = {
         "measurement_time": now_iso(),
         "sample_count": 0,
@@ -1042,10 +1056,10 @@ def check_latency(cutoff_time: Optional[datetime] = None) -> dict:
         "sla_status": "UNKNOWN"
     }
 
-    if not CONFIDENCE_HISTORY_PATH.exists():
+    if not history_path.exists():
         return _empty
 
-    all_entries = _load_history_entries(cutoff_time=cutoff_time)
+    all_entries = _load_history_entries(cutoff_time=cutoff_time, kb_dir=kb_dir)
     latencies = [e.get("latency_ms", 0) for e in all_entries]
 
     if not latencies:

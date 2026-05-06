@@ -604,8 +604,8 @@ class TestSLAThreshold:
             json.dumps({"latency_ms": 80}) + "\n"
         )
 
-        # Patch the path constant
-        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", latency_file)
+        # Patch KB_DIR so check_latency resolves the correct history path
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
 
         result = li.check_latency()
         assert result["sla_status"] == "WARNING"
@@ -622,8 +622,8 @@ class TestSLAThreshold:
             json.dumps({"latency_ms": 40}) + "\n"
         )
 
-        # Patch the path constant
-        monkeypatch.setattr(li, "CONFIDENCE_HISTORY_PATH", latency_file)
+        # Patch KB_DIR so check_latency resolves the correct history path
+        monkeypatch.setattr(li, "KB_DIR", tmp_path)
 
         result = li.check_latency()
         assert result["sla_status"] == "HEALTHY"

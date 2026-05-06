@@ -49,7 +49,7 @@ class TestLoadHistoryEntries:
 
     def test_returns_all_entries_when_no_cutoff(self, tmp_path):
         """With cutoff_time=None all entries are returned."""
-        from akc_service.learning_integration import _load_history_entries, CONFIDENCE_HISTORY_PATH
+        from akc_service.learning_integration import _load_history_entries
 
         now = datetime.now(timezone.utc)
         entries = [
@@ -60,8 +60,7 @@ class TestLoadHistoryEntries:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = _load_history_entries(cutoff_time=None)
+        result = _load_history_entries(cutoff_time=None, kb_dir=tmp_path)
 
         assert len(result) == 3
 
@@ -81,8 +80,7 @@ class TestLoadHistoryEntries:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = _load_history_entries(cutoff_time=cutoff)
+        result = _load_history_entries(cutoff_time=cutoff, kb_dir=tmp_path)
 
         assert len(result) == 2
         pattern_ids = {e["pattern_id"] for e in result}
@@ -95,8 +93,7 @@ class TestLoadHistoryEntries:
         hist_path = tmp_path / "confidence_history.jsonl"
         hist_path.write_text("", encoding="utf-8")
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = _load_history_entries(cutoff_time=datetime.now(timezone.utc))
+        result = _load_history_entries(cutoff_time=datetime.now(timezone.utc), kb_dir=tmp_path)
 
         assert result == []
 
@@ -104,9 +101,8 @@ class TestLoadHistoryEntries:
         """Non-existent history file returns empty list."""
         from akc_service.learning_integration import _load_history_entries
 
-        hist_path = tmp_path / "nonexistent.jsonl"
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = _load_history_entries(cutoff_time=datetime.now(timezone.utc))
+        missing_dir = tmp_path / "nonexistent_dir"
+        result = _load_history_entries(cutoff_time=datetime.now(timezone.utc), kb_dir=missing_dir)
 
         assert result == []
 
@@ -123,8 +119,7 @@ class TestLoadHistoryEntries:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, [good_entry, bad_entry])
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = _load_history_entries(cutoff_time=cutoff)
+        result = _load_history_entries(cutoff_time=cutoff, kb_dir=tmp_path)
 
         # bad_entry skipped; good_entry included
         assert len(result) == 1
@@ -149,8 +144,7 @@ class TestCheckLatencyWindowed:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = check_latency(cutoff_time=None)
+        result = check_latency(cutoff_time=None, kb_dir=tmp_path)
 
         assert result["sample_count"] == 3
         assert result["latency_stats"]["min_ms"] == 10
@@ -170,8 +164,7 @@ class TestCheckLatencyWindowed:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = check_latency(cutoff_time=cutoff)
+        result = check_latency(cutoff_time=cutoff, kb_dir=tmp_path)
 
         assert result["sample_count"] == 1
         assert result["latency_stats"]["min_ms"] == 5
@@ -188,8 +181,7 @@ class TestCheckLatencyWindowed:
         _write_history(hist_path, entries)
 
         recent_cutoff = now - timedelta(hours=1)
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = check_latency(cutoff_time=recent_cutoff)
+        result = check_latency(cutoff_time=recent_cutoff, kb_dir=tmp_path)
 
         assert result["sample_count"] == 0
         assert result["sla_status"] == "UNKNOWN"
@@ -213,8 +205,7 @@ class TestCountHistoryPatternsInWindow:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = count_history_patterns_in_window(cutoff_time=None)
+        result = count_history_patterns_in_window(cutoff_time=None, kb_dir=tmp_path)
 
         assert result["patterns_updated"] == 2   # p1 and p2
         assert result["total_updates"] == 3       # 3 events
@@ -234,8 +225,7 @@ class TestCountHistoryPatternsInWindow:
         hist_path = tmp_path / "confidence_history.jsonl"
         _write_history(hist_path, entries)
 
-        with patch("akc_service.learning_integration.CONFIDENCE_HISTORY_PATH", hist_path):
-            result = count_history_patterns_in_window(cutoff_time=cutoff)
+        result = count_history_patterns_in_window(cutoff_time=cutoff, kb_dir=tmp_path)
 
         assert result["patterns_updated"] == 2
         assert result["total_updates"] == 2
