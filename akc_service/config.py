@@ -87,6 +87,7 @@ class KBContext:
     path: Path
     name: str           # "physics", "default", etc.
     safety_level: int   # Global SAFETY_LEVEL for MVP; extensible to per-KB later
+    routing_tier: str   # "explicit", "entity_mapping", "entity_wildcard", "fallback"
 
 
 def _parse_kb_registry() -> Dict[str, str]:
@@ -225,7 +226,7 @@ def resolve_kb_dir(
         f"→ kb_name={kb_name} → {path}"
     )
 
-    return KBContext(path=path, name=kb_name, safety_level=global_safety_level)
+    return KBContext(path=path, name=kb_name, safety_level=global_safety_level, routing_tier=routing_tier)
 
 
 # ─── Startup Validation ──────────────────────────────────────────────────────

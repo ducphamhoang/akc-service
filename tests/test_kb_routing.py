@@ -139,7 +139,7 @@ class TestKBContext:
 
     def test_kbcontext_instantiation(self, tmp_path):
         """KBContext can be instantiated with correct field types."""
-        kbc = cfg_module.KBContext(path=tmp_path, name="default", safety_level=1)
+        kbc = cfg_module.KBContext(path=tmp_path, name="default", safety_level=1, routing_tier="fallback")
         assert isinstance(kbc.path, Path)
         assert isinstance(kbc.name, str)
         assert isinstance(kbc.safety_level, int)
