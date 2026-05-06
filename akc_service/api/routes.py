@@ -732,10 +732,19 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
         from akc_service.safety_engine import load_safety_state as _load_safety_state
         from akc_service.safety_engine import set_escape_hatch as _set_escape_hatch
 
+        kb_context = resolve_kb_dir(
+            kb_override=request.kb,
+            entity=None,
+            global_safety_level=SAFETY_LEVEL,
+        )
+        kb_dir = kb_context.path
+        kb_checkpoint_path = kb_dir / "patterns.checkpoint"
+
         logger.warning(f"reset_kb: operator-initiated KB reset — reason='{request.reason}'")
+        logger.warning(f"reset_kb: targeting KB='{kb_context.name}' at {kb_dir}")
 
         # Guard: block reset if quarantine is active
-        safety_state = _load_safety_state()
+        safety_state = _load_safety_state(kb_dir=kb_dir)
         if safety_state.get("escape_hatch") == "quarantine":
             logger.error("reset_kb: blocked — quarantine mode is active")
             raise HTTPException(
@@ -747,8 +756,8 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
                 )
             )
 
-        # Check checkpoint exists before attempting restore (uses module-level CHECKPOINT_PATH)
-        if not CHECKPOINT_PATH.exists():
+        # Check checkpoint exists before attempting restore
+        if not kb_checkpoint_path.exists():
             logger.error("reset_kb: no checkpoint available")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -759,11 +768,11 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
             )
 
         # Capture pre-reset pattern count (before restore overwrites patterns.jsonl)
-        _pre_patterns = load_all_patterns()
+        _pre_patterns = load_all_patterns(kb_dir=kb_dir)
         before_count = len({p["id"]: p for p in _pre_patterns if p.get("id")})
 
         # Perform atomic restore
-        success = restore_from_checkpoint()
+        success = restore_from_checkpoint(kb_dir=kb_dir)
         if not success:
             logger.error("reset_kb: restore_from_checkpoint returned False")
             raise HTTPException(
@@ -774,13 +783,13 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
         # Record reset in safety state audit trail (before pattern count — audit records outcome, not verification)
         audit_ok = True
         try:
-            _set_escape_hatch("reset", reason=request.reason)
+            _set_escape_hatch("reset", reason=request.reason, kb_dir=kb_dir)
         except Exception as e:
             audit_ok = False
             logger.warning(f"reset_kb: safety state audit failed (non-fatal): {e}")
 
         # Verify: count unique patterns in restored KB
-        restored_patterns = load_all_patterns()
+        restored_patterns = load_all_patterns(kb_dir=kb_dir)
         unique_patterns: dict = {}
         for p in restored_patterns:
             pid = p.get("id")
@@ -799,7 +808,7 @@ async def reset_kb(request: ResetRequest) -> ResetResponse:
         )
 
         checkpoint_created_at = datetime.fromtimestamp(
-            CHECKPOINT_PATH.stat().st_mtime, tz=timezone.utc
+            kb_checkpoint_path.stat().st_mtime, tz=timezone.utc
         ).isoformat()
 
         return ResetResponse(
