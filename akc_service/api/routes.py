@@ -43,7 +43,7 @@ from akc_service.learning_integration import (
 )
 
 
-def get_active_patterns(entity: str, component: str) -> list:
+def get_active_patterns(entity: str, component: str, kb_dir: Optional[Path] = None) -> list:
     """
     Query patterns for entity:component.
 
@@ -63,7 +63,7 @@ def get_active_patterns(entity: str, component: str) -> list:
 
     # get_deduped_patterns() returns one entry per ID (last-occurrence-wins)
     # sorted by ID ascending — gives us a stable base to sort on.
-    patterns = get_deduped_patterns()
+    patterns = get_deduped_patterns(kb_dir=kb_dir)
     if not patterns:
         logger.warning("get_active_patterns: no patterns loaded from KB")
         return []
