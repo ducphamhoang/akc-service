@@ -618,7 +618,7 @@ ESCAPE_HATCHES = {
 }
 
 
-def set_escape_hatch(mode: str, reason: str = None) -> dict:
+def set_escape_hatch(mode: str, reason: str = None, kb_dir: Optional[Path] = None) -> dict:
     """
     Task 1.27: Set escape hatch mode for manual intervention.
 
@@ -631,7 +631,7 @@ def set_escape_hatch(mode: str, reason: str = None) -> dict:
         }
 
     hatch_config = ESCAPE_HATCHES[mode]
-    state = load_safety_state()
+    state = load_safety_state(kb_dir=kb_dir)
 
     old_hatch = state.get("escape_hatch")
 
@@ -644,7 +644,7 @@ def set_escape_hatch(mode: str, reason: str = None) -> dict:
         state["escape_hatch_set_at"] = now_iso()
         state["escape_hatch_reason"] = reason or f"Manually set to {mode}"
 
-    save_safety_state(state)
+    save_safety_state(state, kb_dir=kb_dir)
 
     # Log to confidence history for audit trail
     append_confidence_history({
@@ -655,7 +655,7 @@ def set_escape_hatch(mode: str, reason: str = None) -> dict:
         "new_escape_hatch": mode if mode != "none" else None,
         "reason": reason,
         "changed_by": "safety_engine",
-    })
+    }, kb_dir=kb_dir)
 
     # Execute escape hatch side effects (pass old_hatch so reset can check prior quarantine state)
     side_effects = _execute_escape_hatch_effects(mode, prior_escape_hatch=old_hatch)

@@ -180,6 +180,10 @@ class ResetRequest(BaseModel):
         default="manual_reset",
         description="Reason for initiating reset (logged to audit trail)"
     )
+    kb: Optional[str] = Field(
+        default=None,
+        description="KB name to reset (e.g. 'default', 'entity_name'). Uses default KB if omitted."
+    )
 
 
 class ResetResponse(BaseModel):
