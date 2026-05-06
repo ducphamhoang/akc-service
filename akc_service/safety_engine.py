@@ -19,6 +19,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import os
 _DEFAULT_KB_DIR = Path(__file__).parent.parent / "kb"
@@ -36,11 +37,13 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def load_all_patterns() -> list:
+def load_all_patterns(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
     patterns = []
-    if not PATTERNS_PATH.exists():
+    if not patterns_path.exists():
         return patterns
-    with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+    with open(patterns_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -100,26 +103,32 @@ def update_fix(fix_id: str, updates: dict) -> bool:
     return found
 
 
-def load_safety_state() -> dict:
-    if not SAFETY_STATE_PATH.exists():
+def load_safety_state(kb_dir: Optional[Path] = None) -> dict:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    safety_state_path = effective_kb_dir / "safety_state.json"
+    if not safety_state_path.exists():
         return {
             "escape_hatch": None,
             "escape_hatch_set_at": None,
             "escape_hatch_reason": None,
         }
-    with open(SAFETY_STATE_PATH, "r", encoding="utf-8") as f:
+    with open(safety_state_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_safety_state(state: dict) -> None:
-    SAFETY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SAFETY_STATE_PATH, "w", encoding="utf-8") as f:
+def save_safety_state(state: dict, kb_dir: Optional[Path] = None) -> None:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    safety_state_path = effective_kb_dir / "safety_state.json"
+    safety_state_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(safety_state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
 
-def append_confidence_history(entry: dict) -> None:
-    CONFIDENCE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIDENCE_HISTORY_PATH, "a", encoding="utf-8") as f:
+def append_confidence_history(entry: dict, kb_dir: Optional[Path] = None) -> None:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    confidence_history_path = effective_kb_dir / "confidence_history.jsonl"
+    confidence_history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(confidence_history_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
 
@@ -407,7 +416,7 @@ def _save_routing(fix_id: str, tier: str, routing: str, justification: str) -> N
 
 # ─── Task 1.25: Conflict Detector ─────────────────────────────────────────────
 
-def detect_conflicts() -> dict:
+def detect_conflicts(kb_dir: Optional[Path] = None) -> dict:
     """
     Task 1.25: Detect conflicts between patterns.
 
@@ -419,8 +428,8 @@ def detect_conflicts() -> dict:
     Returns:
         dict with conflict_list (each with severity: high/medium/low)
     """
-    patterns = load_all_patterns()
-    fix_history = _load_fix_history()
+    patterns = load_all_patterns(kb_dir=kb_dir)
+    fix_history = _load_fix_history(kb_dir=kb_dir)
 
     conflicts = []
 
@@ -526,11 +535,13 @@ def detect_conflicts() -> dict:
     return result
 
 
-def _load_fix_history() -> list:
+def _load_fix_history(kb_dir: Optional[Path] = None) -> list:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    fix_history_path = effective_kb_dir / "fix_history.jsonl"
     fixes = []
-    if not FIX_HISTORY_PATH.exists():
+    if not fix_history_path.exists():
         return fixes
-    with open(FIX_HISTORY_PATH, "r", encoding="utf-8") as f:
+    with open(fix_history_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

@@ -38,10 +38,14 @@ def _monkeypatch_kb_paths(tmp_path: Path) -> None:
     """Patch learning_integration module to use temp paths."""
     patterns_path = tmp_path / "patterns.jsonl"
     confidence_history_path = tmp_path / "confidence_history.jsonl"
+    checkpoint_path = tmp_path / "patterns.checkpoint"
 
-    # Patch the module-level constants
+    # Patch KB_DIR so functions using effective_kb_dir resolve to tmp_path
+    learning_integration.KB_DIR = tmp_path
+    # Patch the module-level constants (used by code that references them directly)
     learning_integration.PATTERNS_PATH = patterns_path
     learning_integration.CONFIDENCE_HISTORY_PATH = confidence_history_path
+    learning_integration.CHECKPOINT_PATH = checkpoint_path
 
 
 @pytest.fixture
@@ -51,9 +55,12 @@ def tmp_kb_paths(tmp_path: Path):
     yield tmp_path
     # Cleanup: restore original paths (optional, but good practice)
     # Restore to package defaults
-    _default_kb = Path(__file__).parent.parent / "kb"
+    import os as _os
+    _default_kb = Path(_os.environ.get("AKC_SERVICE_KB_DIR", str(Path(__file__).parent.parent / "kb")))
+    learning_integration.KB_DIR = _default_kb
     learning_integration.PATTERNS_PATH = _default_kb / "patterns.jsonl"
     learning_integration.CONFIDENCE_HISTORY_PATH = _default_kb / "confidence_history.jsonl"
+    learning_integration.CHECKPOINT_PATH = _default_kb / "patterns.checkpoint"
 
 
 # ─── Test Utilities ───────────────────────────────────────────────────────

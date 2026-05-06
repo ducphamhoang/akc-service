@@ -105,7 +105,7 @@ def find_pattern_by_id(pattern_id: str, patterns: list) -> dict | None:
     return result
 
 
-def build_pattern_index() -> Dict[str, dict]:
+def build_pattern_index(kb_dir: Optional[Path] = None) -> Dict[str, dict]:
     """
     Build an in-memory deduplication index from patterns.jsonl.
 
@@ -126,7 +126,9 @@ def build_pattern_index() -> Dict[str, dict]:
     Raises:
         BlockingIOError: if the file is still write-locked after all retries.
     """
-    if not PATTERNS_PATH.exists():
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+    if not patterns_path.exists():
         return {}
 
     _RETRY_DELAYS = (0.01, 0.02, 0.05)  # 10 ms, 20 ms, 50 ms
@@ -134,7 +136,7 @@ def build_pattern_index() -> Dict[str, dict]:
     last_exc: Exception | None = None
     for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
         try:
-            with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+            with open(patterns_path, "r", encoding="utf-8") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
                 try:
                     index: Dict[str, dict] = {}
@@ -232,7 +234,7 @@ def normalize_pattern_tier(pattern: dict) -> dict:
     return pattern
 
 
-def append_pattern_version(pattern: dict) -> None:
+def append_pattern_version(pattern: dict, kb_dir: Optional[Path] = None) -> None:
     """
     Append a new pattern version to patterns.jsonl (immutable append-only, Phase 4).
 
@@ -242,17 +244,20 @@ def append_pattern_version(pattern: dict) -> None:
     Normalizes confidence_tier before writing to ensure stored tier always matches
     the confidence value using canonical boundary rules (>= 0.85 gold, etc.).
     """
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+
     # Guard: Quarantine mode blocks KB writes
     from akc_service.safety_engine import load_safety_state
-    safety_state = load_safety_state()
+    safety_state = load_safety_state(kb_dir=kb_dir)
     if safety_state.get("escape_hatch") == "quarantine":
         raise RuntimeError("KB writes blocked: quarantine mode active")
 
     # Normalize tier before persisting so stored data is always self-consistent
     normalize_pattern_tier(pattern)
 
-    PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(PATTERNS_PATH, "a", encoding="utf-8") as f:
+    patterns_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(patterns_path, "a", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             f.write(json.dumps(pattern) + "\n")
@@ -269,13 +274,13 @@ def append_pattern_version(pattern: dict) -> None:
         if sync_cfg.sync_enabled():
             confidence = pattern.get("confidence", 0.0)
             if confidence >= sync_cfg.MIN_CONFIDENCE:
-                state = load_state(KB_DIR)
-                add_pending_id(state, pattern["id"], KB_DIR)
+                state = load_state(effective_kb_dir)
+                add_pending_id(state, pattern["id"], effective_kb_dir)
     except Exception:
         pass  # sync queue failure must never break the core write path
 
 
-def log_confidence_update(entry: dict) -> None:
+def log_confidence_update(entry: dict, kb_dir: Optional[Path] = None) -> None:
     """
     Append a confidence update entry to confidence_history.jsonl audit trail (Phase 4).
 
@@ -285,14 +290,17 @@ def log_confidence_update(entry: dict) -> None:
 
     Uses advisory file lock to prevent concurrent append corruption.
     """
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    confidence_history_path = effective_kb_dir / "confidence_history.jsonl"
+
     # Guard: Quarantine mode blocks KB writes
     from akc_service.safety_engine import load_safety_state
-    safety_state = load_safety_state()
+    safety_state = load_safety_state(kb_dir=kb_dir)
     if safety_state.get("escape_hatch") == "quarantine":
         raise RuntimeError("KB writes blocked: quarantine mode active")
 
-    CONFIDENCE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIDENCE_HISTORY_PATH, "a", encoding="utf-8") as f:
+    confidence_history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(confidence_history_path, "a", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             f.write(json.dumps(entry) + "\n")
@@ -313,7 +321,7 @@ def _read_patterns_jsonl(f) -> list:
     return patterns
 
 
-def load_all_patterns() -> list:
+def load_all_patterns(kb_dir: Optional[Path] = None) -> list:
     """
     Load all patterns from patterns.jsonl.
 
@@ -325,7 +333,9 @@ def load_all_patterns() -> list:
     Raises:
         BlockingIOError: if the file is still write-locked after all retries.
     """
-    if not PATTERNS_PATH.exists():
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+    if not patterns_path.exists():
         return []
 
     _RETRY_DELAYS = (0.01, 0.02, 0.05)  # 10 ms, 20 ms, 50 ms
@@ -333,7 +343,7 @@ def load_all_patterns() -> list:
     last_exc: Exception | None = None
     for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
         try:
-            with open(PATTERNS_PATH, "r", encoding="utf-8") as f:
+            with open(patterns_path, "r", encoding="utf-8") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
                 try:
                     return _read_patterns_jsonl(f)
@@ -350,35 +360,40 @@ def load_all_patterns() -> list:
     ) from last_exc
 
 
-def save_all_patterns(patterns: list) -> None:
+def save_all_patterns(patterns: list, kb_dir: Optional[Path] = None) -> None:
     """Atomically save all patterns to patterns.jsonl (overwrite)."""
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+
     # Guard: Quarantine mode blocks KB writes
     from akc_service.safety_engine import load_safety_state
-    safety_state = load_safety_state()
+    safety_state = load_safety_state(kb_dir=kb_dir)
     if safety_state.get("escape_hatch") == "quarantine":
         raise RuntimeError("KB writes blocked: quarantine mode active")
 
-    PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    patterns_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = patterns_path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         for p in patterns:
             f.write(json.dumps(p) + "\n")
-    tmp.replace(PATTERNS_PATH)
+    tmp.replace(patterns_path)
 
     # Invalidate the in-memory index so subsequent reads reflect the rewrite
     invalidate_pattern_index()
 
 
-def append_confidence_history(entry: dict) -> None:
+def append_confidence_history(entry: dict, kb_dir: Optional[Path] = None) -> None:
     """Append a single entry to confidence_history.jsonl (immutable append)."""
-    CONFIDENCE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIDENCE_HISTORY_PATH, "a", encoding="utf-8") as f:
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    confidence_history_path = effective_kb_dir / "confidence_history.jsonl"
+    confidence_history_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(confidence_history_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
 
 # ─── Checkpoint Save/Restore (Reset Escape Hatch) ───────────────────────────────
 
-def save_checkpoint() -> None:
+def save_checkpoint(kb_dir: Optional[Path] = None) -> None:
     """
     Save current patterns.jsonl as checkpoint (called on startup).
 
@@ -387,28 +402,32 @@ def save_checkpoint() -> None:
 
     Called on service startup to capture known-good KB state.
     """
-    if not PATTERNS_PATH.exists():
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+    checkpoint_path = effective_kb_dir / "patterns.checkpoint"
+
+    if not patterns_path.exists():
         return  # No patterns yet, nothing to checkpoint
 
-    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Read patterns.jsonl
     try:
-        patterns_content = PATTERNS_PATH.read_text(encoding="utf-8")
+        patterns_content = patterns_path.read_text(encoding="utf-8")
     except (IOError, OSError):
         return  # Cannot read patterns, skip checkpoint
 
     # Write to temporary file first
-    tmp = CHECKPOINT_PATH.with_suffix(".tmp")
+    tmp = checkpoint_path.with_suffix(".tmp")
     try:
         tmp.write_text(patterns_content, encoding="utf-8")
         # Atomically replace checkpoint with temp file
-        tmp.replace(CHECKPOINT_PATH)
+        tmp.replace(checkpoint_path)
     except (IOError, OSError):
         pass  # Checkpoint write failure should not block startup
 
 
-def restore_from_checkpoint() -> bool:
+def restore_from_checkpoint(kb_dir: Optional[Path] = None) -> bool:
     """
     Restore patterns.jsonl from checkpoint (called on reset escape hatch).
 
@@ -420,23 +439,27 @@ def restore_from_checkpoint() -> bool:
     Returns:
         True if restoration successful, False if no checkpoint available.
     """
-    if not CHECKPOINT_PATH.exists():
+    effective_kb_dir = kb_dir if kb_dir is not None else KB_DIR
+    checkpoint_path = effective_kb_dir / "patterns.checkpoint"
+    patterns_path = effective_kb_dir / "patterns.jsonl"
+
+    if not checkpoint_path.exists():
         return False  # No checkpoint available
 
     try:
         # Read checkpoint content
-        checkpoint_content = CHECKPOINT_PATH.read_text(encoding="utf-8")
+        checkpoint_content = checkpoint_path.read_text(encoding="utf-8")
     except (IOError, OSError):
         return False  # Cannot read checkpoint
 
-    PATTERNS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    patterns_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to temporary file first
-    tmp = PATTERNS_PATH.with_suffix(".tmp")
+    tmp = patterns_path.with_suffix(".tmp")
     try:
         tmp.write_text(checkpoint_content, encoding="utf-8")
         # Atomically replace patterns.jsonl with temp file
-        tmp.replace(PATTERNS_PATH)
+        tmp.replace(patterns_path)
         # Invalidate the in-memory index so queries see the restored KB
         invalidate_pattern_index()
         return True
@@ -735,7 +758,7 @@ def validate_task_result(task_result: dict) -> tuple[bool, str]:
 
 # ─── Confidence Delta Application ────────────────────────────────────────────────
 
-def apply_confidence_delta(task_result: dict) -> dict:
+def apply_confidence_delta(task_result: dict, kb_dir: Optional[Path] = None) -> dict:
     """
     Apply confidence delta to patterns based on task outcome.
 
@@ -744,6 +767,7 @@ def apply_confidence_delta(task_result: dict) -> dict:
             - status: "success" or "failed"
             - akc_context.knowledge_patterns_active: list of pattern IDs
             - timestamp: ISO 8601 time of task completion
+        kb_dir: Optional KB directory; uses module-level KB_DIR when None.
 
     Returns:
         dict with status, patterns_updated, latency_ms
@@ -805,7 +829,7 @@ def apply_confidence_delta(task_result: dict) -> dict:
         }
 
     # Load all patterns (for find_pattern_by_id lookup only)
-    patterns = load_all_patterns()
+    patterns = load_all_patterns(kb_dir=kb_dir)
     patterns_updated = 0
 
     # For each active pattern, apply delta and create version snapshot
@@ -876,7 +900,7 @@ def apply_confidence_delta(task_result: dict) -> dict:
             pass  # If timestamp parse fails, latency_ms stays 0
 
         # Append immutable version to patterns.jsonl (append-only, no race condition)
-        append_pattern_version(updated_pattern)
+        append_pattern_version(updated_pattern, kb_dir=kb_dir)
 
         # Append to confidence history (immutable audit trail)
         history_entry = {
@@ -896,7 +920,7 @@ def apply_confidence_delta(task_result: dict) -> dict:
             "latency_ms": latency_ms
         }
 
-        append_confidence_history(history_entry)
+        append_confidence_history(history_entry, kb_dir=kb_dir)
 
         # Log update
         print(
