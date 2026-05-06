@@ -136,7 +136,7 @@ Extended validation for code quality and safety.
 
 ### 7. REST API
 
-Ten endpoints expose akc-service to agents and external systems.
+Twelve endpoints expose akc-service to agents and external systems.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -146,6 +146,8 @@ Ten endpoints expose akc-service to agents and external systems.
 | POST | `/akc/v1/fix` | Get fix recommendations by category |
 | GET | `/akc/v1/stats` | KB statistics and SLA status |
 | POST | `/akc/v1/update` | Manual confidence override |
+| POST | `/akc/v1/reset` | Restore KB to startup checkpoint |
+| POST | `/akc/v1/kb/export-markdown` | Export patterns to markdown files |
 | GET  | `/akc/v1/sync/status`  | Sync queue state and remote reachability |
 | GET  | `/akc/v1/sync/export`  | Export local patterns for remote pull |
 | POST | `/akc/v1/sync/push`    | Push local patterns to remote KB |
@@ -180,7 +182,62 @@ adapter.record_test_result(test_result, scene_path)     # HTTP 202
 
 See `adapters/godot/README.md` for setup and examples.
 
-### 9. External KB Sync
+### 9. KB Export to Markdown
+
+Export patterns from the knowledge base to markdown files organized by entity, tier, or pattern type.
+
+**What it does:**
+- Converts patterns.jsonl to human-readable markdown for manual review or external processing
+- Generates three organization strategies:
+  - **by-entity**: `kb_export/by-entity/{entity}/{component_id}.md`
+  - **by-tier**: `kb_export/by-tier/{tier}/{entity_id}.md`
+  - **by-pattern-type**: `kb_export/by-pattern-type/{type}/{entity_id}.md`
+- Generates an index.md with metadata and statistics
+- Marks markdown as GraphRAG-ready (compatible with LLM-powered graph databases)
+- Supports minimum confidence filtering to export only high-confidence patterns
+
+**Key operations:**
+```python
+export_patterns_to_markdown(kb_dir, output_dir, organization="by-entity", min_confidence=0.0)
+```
+
+**Use cases:**
+- Manual audit of learned patterns
+- Integration with GraphRAG or external knowledge systems
+- Pattern documentation and review workflows
+- Migration to other systems
+
+**Files:**
+- Generated markdown files (see organization strategies above)
+- `index.md` — folder index with statistics
+
+### 10. KB Reset & Checkpoint
+
+Restore knowledge base to a checkpoint state with atomic writes and audit trail.
+
+**What it does:**
+- Takes a checkpoint snapshot at service startup (startup state)
+- Provides escape hatch to restore KB to the checkpoint state
+- Atomic writes with tmp→rename to prevent corruption
+- Audit trail of all reset operations in `confidence_history.jsonl`
+- Blocks reset when quarantine mode is active (safety guardrail)
+
+**Key operations:**
+```python
+reset_kb(kb_dir=None)  # Restore to startup checkpoint, return ResetResponse
+restore_from_checkpoint(checkpoint_path, kb_dir)  # Atomic restore operation
+```
+
+**Use cases:**
+- Emergency recovery from divergent or corrupted KB
+- Development/testing: reset to known state between test runs
+- Escape hatch when safety guardrails detect critical issues
+
+**Files:**
+- `.akc_checkpoint/patterns.jsonl` — startup snapshot (read-only)
+- `confidence_history.jsonl` — reset operations logged with `update_type: "escape_hatch_reset"`
+
+### 11. External KB Sync
 
 Optional synchronisation layer for connecting local and remote akc-service instances.
 

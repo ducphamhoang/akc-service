@@ -18,6 +18,8 @@ All examples assume akc-service is running locally on port 8000.
 | POST | `/fix` | Get fix recommendations by category | < 100ms |
 | GET | `/stats` | KB statistics and SLA status | < 100ms |
 | POST | `/update` | Manual confidence override | < 100ms |
+| POST | `/reset` | Restore KB to startup checkpoint | < 500ms |
+| POST | `/kb/export-markdown` | Export patterns to markdown files | < 2s |
 | GET  | `/sync/status`  | Sync queue state and remote reachability | < 50ms |
 | GET  | `/sync/export`  | Export local patterns (used by remote pull) | < 100ms |
 | POST | `/sync/push`    | Push queued patterns to remote KB | < 30s |
@@ -629,6 +631,226 @@ curl -X POST http://localhost:8000/akc/v1/update \
 {
   "error": "Pattern 'pattern_001' not found"
 }
+```
+
+---
+
+## POST /reset
+
+Restore knowledge base to its startup checkpoint state.
+
+**Escape hatch:** Manual recovery from divergent KB or critical safety issues.
+
+### Request
+
+**Headers:**
+```
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "reason": "manual_reset",
+  "kb": "default"
+}
+```
+
+**Field Descriptions:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reason` | string | No | Reason for reset (logged to audit trail). Defaults to "manual_reset". |
+| `kb` | string | No | KB name to reset (e.g., 'default', 'physics'). Omit to use default KB. |
+
+### Response (200 OK)
+
+```json
+{
+  "status": "restored",
+  "reason": "manual_reset",
+  "patterns_restored": 157,
+  "checkpoint_used": true,
+  "checkpoint_created_at": "2026-05-05T10:00:00Z",
+  "patterns_before_reset": 203,
+  "effects": [
+    "Confidence history NOT rolled back (append-only, immutable)",
+    "All patterns reverted to startup snapshot",
+    "Audit logged to confidence_history.jsonl"
+  ],
+  "timestamp": "2026-05-05T14:22:15Z"
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | 'restored' \| 'failed' \| 'blocked' |
+| `reason` | string | Echoed reason for reset |
+| `patterns_restored` | integer | Number of unique patterns in restored KB |
+| `checkpoint_used` | boolean | True if checkpoint existed and was used |
+| `checkpoint_created_at` | string | ISO 8601 timestamp when checkpoint was created |
+| `patterns_before_reset` | integer | Pattern count before reset was applied |
+| `effects` | array | Side-effect descriptions (e.g., rollback scope) |
+| `timestamp` | string | ISO 8601 reset operation timestamp |
+
+### Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Reset successful |
+| 503 | No checkpoint file exists |
+| 409 | Reset blocked (quarantine mode active) |
+| 500 | Internal error (e.g., file write failed) |
+
+### Examples
+
+**Successful reset:**
+```bash
+curl -X POST http://localhost:8000/akc/v1/reset \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "corrupted_patterns"}'
+```
+
+**Reset specific KB (multi-KB):**
+```bash
+curl -X POST http://localhost:8000/akc/v1/reset \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "rollback", "kb": "physics"}'
+```
+
+---
+
+## POST /kb/export-markdown
+
+Export patterns to markdown files organized by entity, tier, or pattern type.
+
+**Use case:** Human-readable audit, GraphRAG integration, external system import.
+
+### Request
+
+**Headers:**
+```
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "export_path": "./kb_export",
+  "organization": "by-entity",
+  "min_confidence": 0.7,
+  "include_demoted": false,
+  "dry_run": false
+}
+```
+
+**Field Descriptions:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `export_path` | string | No | Output folder path. Defaults to AKC_SERVICE_KB_EXPORT_DIR or `./kb_export`. |
+| `organization` | string | No | Organization strategy: 'by-entity', 'by-tier', or 'by-pattern-type'. Default: 'by-entity'. |
+| `min_confidence` | float | No | Minimum confidence threshold [0.0, 1.0]. Default: 0.0 (export all). |
+| `include_demoted` | boolean | No | Include demoted patterns (confidence < 0.50). Default: false. |
+| `dry_run` | boolean | No | Validate without writing files. Default: false. |
+
+### Response (200 OK)
+
+```json
+{
+  "success": true,
+  "patterns_exported": 157,
+  "folder": "/home/user/kb_export",
+  "organization": "by-entity",
+  "exported_at": "2026-05-05T14:22:15Z",
+  "error": null
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | Export operation success |
+| `patterns_exported` | integer | Number of patterns exported |
+| `folder` | string | Absolute export folder path |
+| `organization` | string | Organization strategy used |
+| `exported_at` | string | ISO 8601 export timestamp |
+| `error` | string | Error message if export failed |
+
+### Organization Strategies
+
+**by-entity** (default):
+```
+kb_export/
+  by-entity/
+    player/
+      HealthComponent.md
+      MovementComponent.md
+    enemy_knight/
+      HealthComponent.md
+    index.md
+```
+
+**by-tier:**
+```
+kb_export/
+  by-tier/
+    gold/
+      player_HealthComponent.md
+    production/
+      player_MovementComponent.md
+    experimental/
+      enemy_knight_HealthComponent.md
+    index.md
+```
+
+**by-pattern-type:**
+```
+kb_export/
+  by-pattern-type/
+    implementation/
+      player_HealthComponent.md
+    design/
+      enemy_knight_HealthComponent.md
+    index.md
+```
+
+### Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Export successful |
+| 400 | Invalid request (e.g., bad confidence threshold) |
+| 500 | Internal error (e.g., write permission denied) |
+
+### Examples
+
+**Export all patterns by entity:**
+```bash
+curl -X POST http://localhost:8000/akc/v1/kb/export-markdown \
+  -H "Content-Type: application/json" \
+  -d '{"organization": "by-entity"}'
+```
+
+**Export high-confidence patterns by tier:**
+```bash
+curl -X POST http://localhost:8000/akc/v1/kb/export-markdown \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organization": "by-tier",
+    "min_confidence": 0.75,
+    "export_path": "./production_export"
+  }'
+```
+
+**Dry run validation:**
+```bash
+curl -X POST http://localhost:8000/akc/v1/kb/export-markdown \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": true}'
 ```
 
 ---

@@ -3,13 +3,25 @@
     "mtime": 1777889123.60433,
     "hash": "36e8d751e74fb59a754882ff45c0513a"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_module_kb_isolation.py": {
+    "mtime": 1778049608.0121152,
+    "hash": "574dc1f90732948975ccde152bc203fb"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_sync_routes.py": {
     "mtime": 1777966752.3397584,
     "hash": "a9c1cd2b1bc57be2bff2a6bb26a76328"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_kb_dir_param.py": {
+    "mtime": 1778048809.5173604,
+    "hash": "74647dcd7ba8892b63b0e90eea70eb32"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_sync_pending_queue.py": {
     "mtime": 1777966321.252537,
     "hash": "e07cb148d68dd99444fef8e3e1d892eb"
+  },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_concurrent_kb_writes.py": {
+    "mtime": 1778055010.969195,
+    "hash": "11c2f90964090dea4e02e95f3ae98c47"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_sync_push.py": {
     "mtime": 1777966503.3446648,
@@ -23,25 +35,33 @@
     "mtime": 1777966249.1156454,
     "hash": "47e69466d175b8895796764885083c55"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_entity_inference.py": {
+    "mtime": 1778054132.5117068,
+    "hash": "ac913e5887db8662f46a333e070b3a61"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_sync_pull.py": {
     "mtime": 1777966650.3872578,
     "hash": "2c28fc71a62c0967dc7f6ae310eed910"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_checkpoint_reset.py": {
-    "mtime": 1777972606.064087,
-    "hash": "07620b11e33708e749917525b9498877"
+    "mtime": 1778059405.0758176,
+    "hash": "3e4317685dfa66581507df222c399041"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_kb_exporter.py": {
     "mtime": 1777974669.2133803,
     "hash": "97f7cba8c60f23326c94036b47a1be26"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_api_kb_routing.py": {
+    "mtime": 1778054008.485163,
+    "hash": "faf2a0f772e14a857e65d0aaa162d8c9"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_akc_api_endpoints.py": {
-    "mtime": 1777973603.6077929,
-    "hash": "bcee35da6e2a1487f38aef084096d0f6"
+    "mtime": 1778052920.5270698,
+    "hash": "694afa4f643b205d5339c199a54ae774"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_kb_file_io.py": {
-    "mtime": 1777973495.8592577,
-    "hash": "e70bde5b46ca2d40d62bec58d434035d"
+    "mtime": 1778049159.6091871,
+    "hash": "c25de1809374a816f50dbba9bcbcebd1"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_tier_consistency.py": {
     "mtime": 1777973026.8089054,
@@ -55,6 +75,10 @@
     "mtime": 1777889085.1174173,
     "hash": "323c295c0e0f4732e62df03e3b9236c0"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_kb_routing.py": {
+    "mtime": 1778052147.357932,
+    "hash": "5bac1bd508ff8921866a05e19f946a1a"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_learning_integration_e2e.py": {
     "mtime": 1777889114.517792,
     "hash": "e302cb3b8690526e28a904ed8512a7b5"
@@ -64,8 +88,8 @@
     "hash": "92c5282cd5de769028220c170433e2e6"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_stats_time_window.py": {
-    "mtime": 1777973666.2557716,
-    "hash": "1bf68e13da7c9f4d1de7cfcc1bb398d2"
+    "mtime": 1778053033.3711352,
+    "hash": "5a6e8ee3826b7e950db770b19c2435a5"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/tests/test_sync_cli.py": {
     "mtime": 1777966841.9126422,
@@ -88,8 +112,8 @@
     "hash": "333290eee71ae0e7a2e4f56442f8142b"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/monitoring_engine.py": {
-    "mtime": 1777972880.0918305,
-    "hash": "a909a5203830d25151242a3e721a6e55"
+    "mtime": 1778046670.0325933,
+    "hash": "1a78b98089196b496ecebda68dafd6bc"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/detection_engine.py": {
     "mtime": 1777888727.043425,
@@ -100,8 +124,8 @@
     "hash": "aea880ab095b22508367ff6763eaeb49"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/config.py": {
-    "mtime": 1777974857.9168499,
-    "hash": "f32a3b54085c7125ca7dd5903c5f8ed1"
+    "mtime": 1778052138.1739,
+    "hash": "0b504247b21c2616ada47035454d633a"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/validation_engine.py": {
     "mtime": 1777972921.954211,
@@ -132,8 +156,8 @@
     "hash": "881f02ecd6831e76248029f57ff7c528"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/learning_integration.py": {
-    "mtime": 1777973523.825365,
-    "hash": "3a7afae4d4818c0bad2ee1143dbeec4a"
+    "mtime": 1778052939.5936108,
+    "hash": "45f36d63992b97f4de53ea35454e1538"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/dashboard.py": {
     "mtime": 1777888843.7605696,
@@ -148,12 +172,12 @@
     "hash": "9e547123f234bc8b0c187100e8e74f2b"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/latency_monitor.py": {
-    "mtime": 1777965648.49571,
-    "hash": "b5ef8a5738be4ad9e9009c8fe2ba3443"
+    "mtime": 1778049460.3513372,
+    "hash": "2e1d39ce8cd163186bf8dce15fe78779"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/safety_engine.py": {
-    "mtime": 1777972889.5889113,
-    "hash": "545686016526a87ada96b10239cd165b"
+    "mtime": 1778059238.340872,
+    "hash": "2a259efe638ff3a8d1740cdf4165d925"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/metrics_db.py": {
     "mtime": 1777888727.0501652,
@@ -168,8 +192,8 @@
     "hash": "bd53c20e8ffb03a2d0638f2481bc3f09"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/failure_detection.py": {
-    "mtime": 1777888900.223823,
-    "hash": "f7b6e0f9fc4815ef2ec33eb993b260a5"
+    "mtime": 1778049383.4715667,
+    "hash": "190ea1702e6a47c71984952a8f9f3b30"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/staging_manager.py": {
     "mtime": 1777888727.0559077,
@@ -191,6 +215,10 @@
     "mtime": 1777966102.7049606,
     "hash": "6bc14d6f183a0f81a9eef73c4a431268"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/api/models.py": {
+    "mtime": 1778059222.0564396,
+    "hash": "a7eff62a87bb828ba66a5ad204e2504a"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/api/__init__.py": {
     "mtime": 1777888632.1415062,
     "hash": "d41d8cd98f00b204e9800998ecf8427e"
@@ -204,8 +232,8 @@
     "hash": "ec88586ccb070851bfd9f62885cd7aea"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/api/routes.py": {
-    "mtime": 1777974798.9569898,
-    "hash": "6e65b10dba7978c2ec3f92020c184349"
+    "mtime": 1778059283.7831388,
+    "hash": "37db84bb0bf1c9e46b6980011444402d"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/akc_service/sync/pull.py": {
     "mtime": 1777966590.1927512,
@@ -251,6 +279,10 @@
     "mtime": 1777973266.3541045,
     "hash": "3a94625c987572a6cd06fce83422fa8f"
   },
+  "/Users/ducph/godot/my-demon/packages/akc-service/MULTI_KB_ROUTING_SPEC.md": {
+    "mtime": 1778039071.8749778,
+    "hash": "8b7ed1edab4055d7437843b1f41fb37d"
+  },
   "/Users/ducph/godot/my-demon/packages/akc-service/docs/ERROR_HANDLING.md": {
     "mtime": 1777956669.006746,
     "hash": "6f7257c455d65266bf3ba5dafcbf5e3b"
@@ -264,8 +296,8 @@
     "hash": "0d61b6342fb66e5a906e6444524b6689"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/docs/API_REFERENCE.md": {
-    "mtime": 1777967141.3430514,
-    "hash": "a107f42758725640b64df7651d50218e"
+    "mtime": 1778055092.524297,
+    "hash": "b1a3ac493ee1d4270cfc7d8e6f7e67dd"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/docs/TROUBLESHOOTING.md": {
     "mtime": 1777956701.7768378,
@@ -276,8 +308,12 @@
     "hash": "6e2251d2da63c0ba76bee09dc0f95bf3"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/docs/CONFIGURATION.md": {
-    "mtime": 1777967145.992709,
-    "hash": "3219e2abcbe673bcbaa41c1ed3b09e67"
+    "mtime": 1778055147.408529,
+    "hash": "8f1a7ff354a67536d5369b46dd9fe8b7"
+  },
+  "/Users/ducph/godot/my-demon/packages/akc-service/docs/KB_ROUTING.md": {
+    "mtime": 1778055134.5018287,
+    "hash": "5f78ccd724a6d72cdde08321eba03d3d"
   },
   "/Users/ducph/godot/my-demon/packages/akc-service/docs/superpowers/plans/2026-05-05-critical-bug-fixes.md": {
     "mtime": 1777965137.4013429,

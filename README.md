@@ -31,14 +31,15 @@ Comprehensive guides for every aspect of akc-service:
 
 - **[CAPABILITIES.md](docs/CAPABILITIES.md)** — What akc-service does
   - Learning, safety, CSP, validation, monitoring engines
-  - REST API overview (5 endpoints)
+  - KB export to markdown & checkpoint reset features
+  - REST API overview (12 endpoints)
   - System architecture & data flow
   - Knowledge base structure
 
 ### API Integration
 
 - **[API_REFERENCE.md](docs/API_REFERENCE.md)** — Complete REST API documentation
-  - All 5 endpoints with specs and examples
+  - All 12 endpoints with specs and examples
   - Request/response schemas (Pydantic models)
   - Status codes and error handling
   - curl and Python client examples
@@ -81,6 +82,12 @@ Comprehensive guides for every aspect of akc-service:
 | POST | `/akc/v1/fix` | Get fix recommendations by category | < 100ms |
 | GET | `/akc/v1/stats` | KB statistics and SLA status | < 100ms |
 | POST | `/akc/v1/update` | Manual confidence override | < 100ms |
+| POST | `/akc/v1/reset` | Restore KB to startup checkpoint | < 500ms |
+| POST | `/akc/v1/kb/export-markdown` | Export patterns to markdown files | < 2s |
+| GET | `/akc/v1/sync/status` | Sync queue state and remote reachability | < 50ms |
+| POST | `/akc/v1/sync/push` | Push patterns to remote KB | < 30s |
+| POST | `/akc/v1/sync/pull` | Pull patterns from remote KB | < 30s |
+| POST | `/akc/v1/sync/receive` | Accept patterns from remote node | < 100ms |
 
 See [API_REFERENCE.md](docs/API_REFERENCE.md) for full endpoint documentation.
 
@@ -90,13 +97,15 @@ See [API_REFERENCE.md](docs/API_REFERENCE.md) for full endpoint documentation.
 akc_service/
   api/
     main.py               # FastAPI app, middleware, lifespan
-    routes.py             # REST endpoints (5 routes)
+    routes.py             # REST endpoints (12 routes)
+    models.py             # Pydantic request/response schemas
   
   learning_engine.py      # Pattern storage, versioning, tier classification
-  safety_engine.py        # Guardrail enforcement, fix routing
+  safety_engine.py        # Guardrail enforcement, escape hatches
   csp_solver.py           # Constraint satisfaction problem solver
   validation_engine.py    # Test generation, GDScript linting
   monitoring_engine.py    # Latency tracking, alerts
+  kb_exporter.py          # KB export to markdown (by-entity, by-tier, by-pattern-type)
   
   learning_integration.py # Outcome delta application (async update)
   metrics_collector.py    # Time-series metrics
@@ -107,6 +116,7 @@ akc_service/
     confidence_history.jsonl
     fix_history.jsonl
     latency_samples.jsonl
+    .akc_checkpoint/      # Startup snapshot for reset escape hatch
 
 adapters/
   godot/                  # Godot engine integration
