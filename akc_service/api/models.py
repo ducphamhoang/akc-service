@@ -190,6 +190,8 @@ class ResetResponse(BaseModel):
     checkpoint_used: bool = Field(..., description="True if checkpoint existed and was used")
     effects: List[str] = Field(default_factory=list, description="Side-effect descriptions")
     timestamp: str = Field(..., description="ISO 8601 timestamp of reset operation")
+    checkpoint_created_at: str = Field(..., description="ISO 8601 timestamp when the checkpoint file was written")
+    patterns_before_reset: int = Field(..., description="Number of unique patterns in KB before restore was applied")
 
 
 # ─── KB Markdown Export ────────────────────────────────────────────────────
