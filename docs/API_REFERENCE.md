@@ -74,7 +74,8 @@ Content-Type: application/json
   "context": {
     "difficulty": "hard",
     "phase": "late_game"
-  }
+  },
+  "kb": "physics"
 }
 ```
 
@@ -86,6 +87,7 @@ Content-Type: application/json
 | `entity` | string | Yes | Entity name (e.g., 'player', 'enemy_knight', 'boss') |
 | `component` | string | Yes | Component name (e.g., 'HealthComponent', 'MovementComponent') |
 | `context` | object | No | Additional context for the query (optional metadata) |
+| `kb` | string | No | Knowledge base name from AKC_SERVICE_KB_REGISTRY (e.g., "physics"). Omit to use entity-inferred or default KB. |
 
 **Valid entity:component pairs:**
 ```
@@ -154,7 +156,9 @@ patterns = response.json()
     }
   ],
   "query_latency_ms": 12.5,
-  "source": "kb"
+  "source": "kb",
+  "kb_used": "physics",
+  "routing_tier": "explicit"
 }
 ```
 
@@ -168,6 +172,17 @@ patterns = response.json()
 | `patterns[].tier` | string | Confidence tier: "gold", "production", "experimental", "demoted" |
 | `query_latency_ms` | number | Query execution time in milliseconds |
 | `source` | string | Source of patterns: "kb" (knowledge base) or "cache" |
+| `kb_used` | string | Name of the KB directory used to serve this request |
+| `routing_tier` | string | How the KB was selected: see Routing Tier Values table below |
+
+### Routing Tier Values
+
+| Value | Description |
+|-------|-------------|
+| `"explicit"` | `kb` field was present in the request body (Tier 1 — highest priority) |
+| `"entity_mapping"` | Entity name matched an exact entry in `ENTITY_KB_MAPPING` (Tier 2) |
+| `"entity_wildcard"` | Entity name matched the `entity:*` wildcard in `ENTITY_KB_MAPPING` (Tier 2) |
+| `"fallback"` | No `kb` field and no entity match — default KB used (Tier 3) |
 
 ### Status Codes
 
@@ -232,7 +247,8 @@ Content-Type: application/json
         "applied_at": "2026-05-05T14:20:00Z"
       }
     ]
-  }
+  },
+  "kb": "physics"
 }
 ```
 
@@ -245,6 +261,7 @@ Content-Type: application/json
 | `status` | string | Yes | Task outcome: "success" or "failed" |
 | `timestamp` | string | Yes | ISO 8601 completion timestamp |
 | `akc_context` | object | Yes | Context about which patterns were active during task |
+| `kb` | string | No | Knowledge base name from AKC_SERVICE_KB_REGISTRY (e.g., "physics"). Omit to use entity-inferred or default KB. |
 
 **akc_context structure:**
 
@@ -317,7 +334,9 @@ result = response.json()
   "task_id": "task-042",
   "update_mode": "async",
   "patterns_to_update": 1,
-  "timestamp": "2026-05-05T14:22:16Z"
+  "timestamp": "2026-05-05T14:22:16Z",
+  "kb_used": "physics",
+  "routing_tier": "explicit"
 }
 ```
 
@@ -330,6 +349,8 @@ result = response.json()
 | `update_mode` | string | "async" (KB update in background) or "sync" (critical patterns) |
 | `patterns_to_update` | integer | Number of patterns that will be updated |
 | `timestamp` | string | Server timestamp (ISO 8601) |
+| `kb_used` | string | Name of the KB directory used to serve this request |
+| `routing_tier` | string | How the KB was selected. See [Routing Tier Values](#routing-tier-values) in the /query section above. |
 
 ### Status Codes
 
@@ -372,7 +393,8 @@ Content-Type: application/json
 ```json
 {
   "signature_hash": "sha256_abc123def456",
-  "category": "implementation"
+  "category": "implementation",
+  "kb": "physics"
 }
 ```
 
@@ -382,6 +404,7 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | `signature_hash` | string | Yes | Pattern signature hash (for matching KB entries) |
 | `category` | string | Yes | Fix category (enum: "detection", "implementation", "testing", "documentation", "other") |
+| `kb` | string | No | Knowledge base name from AKC_SERVICE_KB_REGISTRY (e.g., "physics"). Omit to use entity-inferred or default KB. |
 
 **Valid categories:**
 - `detection` — Logic/algorithm fixes
@@ -420,9 +443,21 @@ curl -X POST http://localhost:8000/akc/v1/fix \
     }
   ],
   "category": "implementation",
-  "count": 2
+  "count": 2,
+  "kb_used": "physics",
+  "routing_tier": "explicit"
 }
 ```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fixes` | array | List of fix recommendations matching the category |
+| `category` | string | The requested fix category |
+| `count` | integer | Number of fixes returned |
+| `kb_used` | string | Name of the KB directory used to serve this request |
+| `routing_tier` | string | How the KB was selected. See [Routing Tier Values](#routing-tier-values) in the /query section above. |
 
 ### Status Codes
 
@@ -446,11 +481,16 @@ Retrieve knowledge base statistics: latency compliance, tier distribution, avera
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `time_window` | string | "all" | Time window: "all", "24h", "7d", or "30d" |
+| `kb` | string | — | Knowledge base name from AKC_SERVICE_KB_REGISTRY. Required when multiple KBs are registered; omit when only one KB is registered. |
 
 ### Example Request (curl)
 
 ```bash
+# Single-KB deployment (kb param optional)
 curl -X GET "http://localhost:8000/akc/v1/stats?time_window=24h"
+
+# Multi-KB deployment (kb param required)
+curl -X GET "http://localhost:8000/akc/v1/stats?kb=physics&time_window=24h"
 ```
 
 ### Example Request (Python)
@@ -481,7 +521,9 @@ print(f"Avg confidence: {stats['avg_confidence']}")
   },
   "sla_status": "HEALTHY",
   "gold_tier_count": 12,
-  "avg_confidence": 0.76
+  "avg_confidence": 0.76,
+  "kb_used": "physics",
+  "routing_tier": "explicit"
 }
 ```
 
@@ -497,12 +539,15 @@ print(f"Avg confidence: {stats['avg_confidence']}")
 | `sla_status` | string | "HEALTHY" (p95 < 50ms) or "WARNING" (p95 >= 50ms) |
 | `gold_tier_count` | integer | Count of patterns in gold tier |
 | `avg_confidence` | number | Average confidence across all patterns [0.0, 1.0] |
+| `kb_used` | string | Name of the KB directory used to serve this request |
+| `routing_tier` | string | How the KB was selected. See [Routing Tier Values](#routing-tier-values) in the /query section above. |
 
 ### Status Codes
 
 | Code | Meaning |
 |------|---------|
 | 200 | Success — stats returned |
+| 400 | Multiple KBs registered and no ?kb= param provided |
 | 500 | Server error — stats collection failed |
 
 ---
