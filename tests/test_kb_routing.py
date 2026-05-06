@@ -129,6 +129,14 @@ class TestKBContext:
         assert "name" in fields
         assert "safety_level" in fields
 
+    def test_kbcontext_has_routing_tier_field(self):
+        """API-05: KBContext dataclass has routing_tier: str field (Wave 2 callers need it)."""
+        fields = {f.name: f for f in dataclasses.fields(cfg_module.KBContext)}
+        assert "routing_tier" in fields, (
+            "KBContext is missing routing_tier field. "
+            "Add `routing_tier: str` to the KBContext dataclass."
+        )
+
     def test_kbcontext_instantiation(self, tmp_path):
         """KBContext can be instantiated with correct field types."""
         kbc = cfg_module.KBContext(path=tmp_path, name="default", safety_level=1)
@@ -137,6 +145,21 @@ class TestKBContext:
         assert isinstance(kbc.safety_level, int)
         assert kbc.name == "default"
         assert kbc.safety_level == 1
+
+    def test_kbcontext_instantiation_with_routing_tier(self, tmp_path):
+        """KBContext can be instantiated with routing_tier field."""
+        kbc = cfg_module.KBContext(
+            path=tmp_path, name="physics", safety_level=1, routing_tier="explicit"
+        )
+        assert isinstance(kbc.routing_tier, str)
+        assert kbc.routing_tier == "explicit"
+
+    def test_kbcontext_routing_tier_fallback_value(self, tmp_path):
+        """KBContext accepts routing_tier='fallback' as a valid value."""
+        kbc = cfg_module.KBContext(
+            path=tmp_path, name="default", safety_level=1, routing_tier="fallback"
+        )
+        assert kbc.routing_tier == "fallback"
 
 
 # ─── TestResolveKBDir ─────────────────────────────────────────────────────────
@@ -221,6 +244,77 @@ class TestResolveKBDir:
         importlib.reload(cfg_module)
         kbc = cfg_module.resolve_kb_dir(kb_override="animation", entity="physics")
         assert kbc.name == "animation"
+
+    def test_explicit_override_routing_tier(self, monkeypatch, clean_config):
+        """API-05/OBS-02: resolve_kb_dir with valid kb_override returns routing_tier='explicit'."""
+        monkeypatch.setenv(
+            "AKC_SERVICE_KB_REGISTRY",
+            json.dumps({"default": "/tmp/kb/default", "physics": "/tmp/kb/physics"}),
+        )
+        importlib.reload(cfg_module)
+        kbc = cfg_module.resolve_kb_dir(kb_override="physics")
+        assert hasattr(kbc, "routing_tier"), "KBContext missing routing_tier field"
+        assert kbc.routing_tier == "explicit", (
+            f"Expected routing_tier='explicit', got {kbc.routing_tier!r}"
+        )
+
+    def test_fallback_routing_tier_no_args(self, monkeypatch, clean_config):
+        """API-05/OBS-02: resolve_kb_dir() with no args returns routing_tier='fallback'."""
+        monkeypatch.delenv("AKC_SERVICE_KB_REGISTRY", raising=False)
+        monkeypatch.delenv("AKC_SERVICE_ENTITY_KB_MAPPING", raising=False)
+        importlib.reload(cfg_module)
+        kbc = cfg_module.resolve_kb_dir()
+        assert hasattr(kbc, "routing_tier"), "KBContext missing routing_tier field"
+        assert kbc.routing_tier == "fallback", (
+            f"Expected routing_tier='fallback', got {kbc.routing_tier!r}"
+        )
+
+    def test_unknown_kb_override_routing_tier_is_fallback(self, monkeypatch, clean_config):
+        """D-02: kb_override not in registry → silent fallthrough → routing_tier='fallback'."""
+        monkeypatch.setenv(
+            "AKC_SERVICE_KB_REGISTRY",
+            json.dumps({"default": "/tmp/kb/default"}),
+        )
+        importlib.reload(cfg_module)
+        kbc = cfg_module.resolve_kb_dir(kb_override="unknown_kb")
+        assert hasattr(kbc, "routing_tier"), "KBContext missing routing_tier field"
+        assert kbc.routing_tier == "fallback", (
+            f"Expected routing_tier='fallback' for unknown kb_override, got {kbc.routing_tier!r}"
+        )
+
+    def test_entity_mapping_routing_tier(self, monkeypatch, clean_config):
+        """API-05: entity matching explicit key in ENTITY_KB_MAPPING → routing_tier='entity_mapping'."""
+        monkeypatch.setenv(
+            "AKC_SERVICE_KB_REGISTRY",
+            json.dumps({"default": "/tmp/kb/default", "physics": "/tmp/kb/physics"}),
+        )
+        monkeypatch.setenv(
+            "AKC_SERVICE_ENTITY_KB_MAPPING",
+            json.dumps({"entity:physics": "physics", "entity:*": "default"}),
+        )
+        importlib.reload(cfg_module)
+        kbc = cfg_module.resolve_kb_dir(entity="physics")
+        assert hasattr(kbc, "routing_tier"), "KBContext missing routing_tier field"
+        assert kbc.routing_tier == "entity_mapping", (
+            f"Expected routing_tier='entity_mapping', got {kbc.routing_tier!r}"
+        )
+
+    def test_entity_wildcard_routing_tier(self, monkeypatch, clean_config):
+        """API-05: entity not in explicit key → wildcard match → routing_tier='entity_wildcard'."""
+        monkeypatch.setenv(
+            "AKC_SERVICE_KB_REGISTRY",
+            json.dumps({"default": "/tmp/kb/default", "physics": "/tmp/kb/physics"}),
+        )
+        monkeypatch.setenv(
+            "AKC_SERVICE_ENTITY_KB_MAPPING",
+            json.dumps({"entity:physics": "physics", "entity:*": "default"}),
+        )
+        importlib.reload(cfg_module)
+        kbc = cfg_module.resolve_kb_dir(entity="rendering")
+        assert hasattr(kbc, "routing_tier"), "KBContext missing routing_tier field"
+        assert kbc.routing_tier == "entity_wildcard", (
+            f"Expected routing_tier='entity_wildcard', got {kbc.routing_tier!r}"
+        )
 
 
 # ─── TestPerformance ─────────────────────────────────────────────────────────
